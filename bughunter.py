@@ -29,9 +29,10 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # Import our modules
 from subdomain_enum import SubdomainEnumerator, SubdomainInfo, check_tools_installed
 from full_nuclei_scanner import (
-    NucleiScanner, NucleiFinding, ScanStatistics,
+    NucleiScanner, NucleiFinding, ScanStatistics, ScanProgress,
     check_nuclei_installed, get_nuclei_version, get_template_count
 )
+from advanced_checks import AdvancedScanner, AdvancedFinding
 
 # Colors
 class Colors:
@@ -65,8 +66,9 @@ class ScanReport:
     subdomains: List[SubdomainInfo] = field(default_factory=list)
     interesting_subdomains: List[SubdomainInfo] = field(default_factory=list)
     findings: List[NucleiFinding] = field(default_factory=list)
+    advanced_findings: List[AdvancedFinding] = field(default_factory=list)
     statistics: Dict = field(default_factory=dict)
-    
+
     def to_dict(self) -> dict:
         return {
             "domain": self.domain,
@@ -76,6 +78,7 @@ class ScanReport:
             "subdomains": [s.to_dict() for s in self.subdomains],
             "interesting_subdomains": [s.to_dict() for s in self.interesting_subdomains],
             "findings": [f.to_dict() for f in self.findings],
+            "advanced_findings": [f.to_dict() for f in self.advanced_findings],
         }
 
 
@@ -122,7 +125,7 @@ def print_subdomain(info: SubdomainInfo):
     """Print subdomain info."""
     status = f"{Colors.GREEN}✓{Colors.RESET}" if info.is_alive else f"{Colors.RED}✗{Colors.RESET}"
     sev_color = SEVERITY_COLORS.get(info.severity, Colors.WHITE)
-    
+
     print(f"  {status} {sev_color}[{info.severity.upper():8}]{Colors.RESET} {info.subdomain}")
     if info.categories:
         cats = ", ".join(info.categories)
@@ -132,6 +135,19 @@ def print_subdomain(info: SubdomainInfo):
     if info.technologies:
         techs = ", ".join(info.technologies[:5])
         print(f"             {Colors.GRAY}Tech:{Colors.RESET} {techs}")
+    print()
+
+
+def print_advanced_finding(finding: AdvancedFinding):
+    """Print an advanced vulnerability finding."""
+    color = SEVERITY_COLORS.get(finding.severity, Colors.WHITE)
+    print(f"  {color}[{finding.severity.upper():8}]{Colors.RESET} "
+          f"{Colors.WHITE}{finding.title}{Colors.RESET}")
+    print(f"             {Colors.GRAY}Type:{Colors.RESET}   {finding.check_type}")
+    print(f"             {Colors.GRAY}Target:{Colors.RESET} {finding.target}")
+    if finding.evidence:
+        evidence = finding.evidence[:80] + "..." if len(finding.evidence) > 80 else finding.evidence
+        print(f"             {Colors.GRAY}Evidence:{Colors.RESET} {evidence}")
     print()
 
 
@@ -505,7 +521,16 @@ Examples:
     nuclei_group.add_argument("--concurrency", type=int, default=25, help="Concurrent templates (default: 25)")
     nuclei_group.add_argument("--skip-nuclei", action="store_true", help="Skip Nuclei scanning")
     nuclei_group.add_argument("--update-templates", action="store_true", help="Update Nuclei templates")
-    
+
+    # Advanced checks options
+    adv_group = parser.add_argument_group("Advanced Checks")
+    adv_group.add_argument("--skip-advanced", action="store_true", help="Skip advanced vulnerability checks")
+    adv_group.add_argument("--advanced-checks", nargs="+",
+                           choices=["js_secrets", "hidden_params", "api_discovery", "cors",
+                                    "method_override", "cache_poison", "host_header"],
+                           help="Specific advanced checks to run (default: all)")
+    adv_group.add_argument("--advanced-threads", type=int, default=10, help="Threads for advanced checks (default: 10)")
+
     # Output options
     output_group = parser.add_argument_group("Output Options")
     output_group.add_argument("-o", "--output", help="Output HTML report file")
@@ -675,7 +700,62 @@ Examples:
             "findings": severity_counts,
             "total_findings": len(findings),
         }
-    
+
+    # Advanced vulnerability checks
+    if not args.skip_advanced:
+        print_section("Running Advanced Vulnerability Checks", "🔬")
+
+        # Determine which checks to run
+        checks_to_run = args.advanced_checks or [
+            "js_secrets", "cors", "api_discovery", "cache_poison", "host_header"
+        ]
+        print(f"  Checks: {', '.join(checks_to_run)}")
+
+        # Build targets for advanced checks
+        adv_targets = [f"https://{args.domain}", f"http://{args.domain}"]
+        for sub in report.interesting_subdomains[:10]:
+            if sub.url:
+                adv_targets.append(sub.url)
+
+        adv_targets = list(set(adv_targets))
+        print(f"  Targets: {len(adv_targets)}")
+        print()
+
+        def on_adv_finding(finding: AdvancedFinding):
+            print_advanced_finding(finding)
+            report.advanced_findings.append(finding)
+
+        def on_adv_progress(check_name: str, current: int, total: int):
+            if args.verbose:
+                print(f"  {Colors.GRAY}[{check_name}] {current}/{total}{Colors.RESET}")
+
+        adv_scanner = AdvancedScanner(
+            timeout=args.timeout,
+            threads=args.advanced_threads,
+            proxy=args.proxy,
+            callback=on_adv_finding,
+            progress_callback=on_adv_progress if args.verbose else None,
+        )
+
+        adv_scanner.scan(adv_targets, checks_to_run)
+
+        # Advanced findings summary
+        adv_severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+        for f in report.advanced_findings:
+            if f.severity in adv_severity_counts:
+                adv_severity_counts[f.severity] += 1
+
+        print_section("Advanced Checks Summary", "📊")
+        print(f"  {Colors.RED}Critical:{Colors.RESET} {adv_severity_counts['critical']}")
+        print(f"  {Colors.YELLOW}High:{Colors.RESET}     {adv_severity_counts['high']}")
+        print(f"  {Colors.BLUE}Medium:{Colors.RESET}   {adv_severity_counts['medium']}")
+        print(f"  {Colors.GREEN}Low:{Colors.RESET}      {adv_severity_counts['low']}")
+        print(f"  {Colors.WHITE}Total:{Colors.RESET}    {len(report.advanced_findings)}")
+
+        # Update statistics
+        report.statistics["advanced_findings"] = adv_severity_counts
+        report.statistics["total_advanced_findings"] = len(report.advanced_findings)
+
     # Complete report
     report.completed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
@@ -711,7 +791,10 @@ Examples:
     print(f"  Domain: {report.domain}")
     print(f"  Subdomains: {len(report.subdomains)}")
     print(f"  Interesting: {len(report.interesting_subdomains)}")
-    print(f"  Vulnerabilities: {len(report.findings)}")
+    print(f"  Nuclei Findings: {len(report.findings)}")
+    print(f"  Advanced Findings: {len(report.advanced_findings)}")
+    total_vulns = len(report.findings) + len(report.advanced_findings)
+    print(f"  {Colors.YELLOW}Total Vulnerabilities: {total_vulns}{Colors.RESET}")
     print(f"{Colors.GREEN}{'═' * 60}{Colors.RESET}\n")
 
 
