@@ -21,9 +21,10 @@ import tempfile
 # Import scanning modules
 from subdomain_enum import SubdomainEnumerator, SubdomainInfo, check_tools_installed
 from full_nuclei_scanner import (
-    NucleiScanner, NucleiFinding,
+    NucleiScanner, NucleiFinding, ScanProgress,
     check_nuclei_installed, get_nuclei_version, get_template_count
 )
+from advanced_checks import AdvancedScanner, AdvancedFinding
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.urandom(24)
@@ -44,15 +45,16 @@ class ScanJob:
     total: int = 0
     started_at: str = field(default_factory=lambda: datetime.now().isoformat())
     completed_at: Optional[str] = None
-    
+
     # Results
     subdomains: List[dict] = field(default_factory=list)
     interesting_subdomains: List[dict] = field(default_factory=list)
     findings: List[dict] = field(default_factory=list)
-    
+    advanced_findings: List[dict] = field(default_factory=list)
+
     # Config
     config: dict = field(default_factory=dict)
-    
+
     # Statistics
     stats: dict = field(default_factory=dict)
 
@@ -125,18 +127,26 @@ def run_scan_job(job: ScanJob):
         if not config.get("skip_nuclei", False) and check_nuclei_installed():
             job.phase = "nuclei"
             emit_update(job, f"Starting Nuclei scan on {len(all_targets)} targets...")
-            
+
             def finding_callback(finding: NucleiFinding):
                 finding_dict = finding.to_dict()
                 job.findings.append(finding_dict)
                 job.progress += 1
-                
+
                 socketio.emit("finding", {
                     "job_id": job.job_id,
                     "finding": finding_dict,
                     "total_findings": len(job.findings),
                 }, namespace="/scan")
-            
+
+            def progress_callback(progress: ScanProgress):
+                """Emit detailed progress updates for Nuclei scan."""
+                socketio.emit("nuclei_progress", {
+                    "job_id": job.job_id,
+                    "progress": progress.to_dict(),
+                    "message": _format_progress_message(progress),
+                }, namespace="/scan")
+
             scanner = NucleiScanner(
                 severity=config.get("severity"),
                 tags=config.get("tags"),
@@ -147,13 +157,58 @@ def run_scan_job(job: ScanJob):
                 proxy=config.get("proxy"),
                 verbose=False,
                 callback=finding_callback,
+                progress_callback=progress_callback,
             )
-            
+
             # Run scan
             targets_list = list(all_targets)
             for finding in scanner.scan(targets_list):
                 pass  # Callback handles everything
-        
+
+        # Phase 3: Advanced Checks (JS secrets, CORS, API discovery, etc.)
+        if not config.get("skip_advanced", False):
+            job.phase = "advanced"
+            emit_update(job, "Running advanced vulnerability checks...")
+
+            def advanced_finding_callback(finding: AdvancedFinding):
+                finding_dict = finding.to_dict()
+                job.advanced_findings.append(finding_dict)
+
+                socketio.emit("advanced_finding", {
+                    "job_id": job.job_id,
+                    "finding": finding_dict,
+                    "total_advanced": len(job.advanced_findings),
+                }, namespace="/scan")
+
+            def advanced_progress_callback(check_name: str, current: int, total: int):
+                socketio.emit("advanced_progress", {
+                    "job_id": job.job_id,
+                    "check_name": check_name,
+                    "current": current,
+                    "total": total,
+                }, namespace="/scan")
+
+            adv_scanner = AdvancedScanner(
+                timeout=config.get("timeout", 10),
+                threads=config.get("concurrency", 10),
+                proxy=config.get("proxy"),
+                callback=advanced_finding_callback,
+                progress_callback=advanced_progress_callback,
+            )
+
+            # Select which advanced checks to run
+            adv_checks = config.get("advanced_checks") or [
+                "js_secrets", "cors", "api_discovery", "cache_poison", "host_header"
+            ]
+
+            # Run on main domain and interesting subdomains
+            adv_targets = [f"https://{job.domain}", f"http://{job.domain}"]
+            for sub in job.interesting_subdomains[:10]:  # Limit to top 10 interesting
+                if sub.get("url"):
+                    adv_targets.append(sub["url"])
+
+            adv_scanner.scan(list(set(adv_targets)), adv_checks)
+
         # Finalize
         job.phase = "complete"
         job.status = "completed"
@@ -166,13 +221,23 @@ def run_scan_job(job: ScanJob):
             if sev in severity_counts:
                 severity_counts[sev] += 1
         
+        # Count advanced finding severities
+        adv_severity_counts = {"adv_critical": 0, "adv_high": 0, "adv_medium": 0, "adv_low": 0}
+        for f in job.advanced_findings:
+            sev = f.get("severity", "low")
+            key = f"adv_{sev}"
+            if key in adv_severity_counts:
+                adv_severity_counts[key] += 1
+
         job.stats = {
             "subdomains_total": len(job.subdomains),
             "subdomains_alive": len([s for s in job.subdomains if s.get("is_alive")]),
             "subdomains_interesting": len(job.interesting_subdomains),
             "targets_scanned": len(all_targets),
             "findings_total": len(job.findings),
+            "advanced_findings_total": len(job.advanced_findings),
             **severity_counts,
+            **adv_severity_counts,
         }
         
         socketio.emit("scan_complete", {
@@ -200,6 +265,36 @@ def emit_update(job: ScanJob, message: str):
         "progress": job.progress,
         "total": job.total,
     }, namespace="/scan")
+
+
+def _format_progress_message(progress: ScanProgress) -> str:
+    """Format a human-readable progress message."""
+    parts = []
+
+    if progress.percent_complete > 0:
+        parts.append(f"{progress.percent_complete:.1f}%")
+
+    if progress.requests_per_second > 0:
+        parts.append(f"{progress.requests_per_second:.0f} req/s")
+
+    if progress.requests_made > 0:
+        parts.append(f"{progress.requests_made} requests")
+
+    if progress.findings > 0:
+        parts.append(f"{progress.findings} findings")
+
+    if progress.eta_seconds and progress.eta_seconds > 0:
+        eta_min = int(progress.eta_seconds // 60)
+        eta_sec = int(progress.eta_seconds % 60)
+        if eta_min > 0:
+            parts.append(f"ETA: {eta_min}m {eta_sec}s")
+        else:
+            parts.append(f"ETA: {eta_sec}s")
+
+    if progress.errors > 0:
+        parts.append(f"{progress.errors} errors")
+
+    return " | ".join(parts) if parts else "Scanning..."
 
 
 # ===================== Routes =====================
@@ -250,6 +345,8 @@ def start_scan():
             "no_alive_check": data.get("no_alive_check", False),
             "sources": data.get("sources"),
             "additional_targets": data.get("additional_targets", []),
+            "skip_advanced": data.get("skip_advanced", False),
+            "advanced_checks": data.get("advanced_checks"),  # List of checks to run
         },
     )
     
@@ -441,6 +538,74 @@ def get_template_tags():
             "rce", "sqli", "xss", "ssrf", "lfi",
             "auth-bypass", "default-login", "exposure",
             "misconfig", "takeover", "panel", "api",
+        ]
+    })
+
+
+@app.route("/api/scan/<job_id>/advanced", methods=["GET"])
+def get_advanced_findings(job_id: str):
+    """Get advanced vulnerability findings."""
+    job = active_scans.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+
+    # Filter by severity or check type if specified
+    severity = request.args.get("severity")
+    check_type = request.args.get("check_type")
+
+    findings = job.advanced_findings
+    if severity:
+        findings = [f for f in findings if f.get("severity") == severity]
+    if check_type:
+        findings = [f for f in findings if f.get("check_type") == check_type]
+
+    return jsonify({
+        "total": len(job.advanced_findings),
+        "filtered": len(findings),
+        "findings": findings,
+    })
+
+
+@app.route("/api/advanced/checks", methods=["GET"])
+def get_advanced_checks():
+    """Get available advanced vulnerability checks."""
+    return jsonify({
+        "checks": [
+            {
+                "id": "js_secrets",
+                "name": "JavaScript Secret Analysis",
+                "description": "Scans JS files for hardcoded API keys, tokens, and credentials",
+            },
+            {
+                "id": "hidden_params",
+                "name": "Hidden Parameter Discovery",
+                "description": "Discovers debug/admin parameters that affect application behavior",
+            },
+            {
+                "id": "api_discovery",
+                "name": "API Endpoint Discovery",
+                "description": "Finds exposed API docs, Swagger, GraphQL, and internal endpoints",
+            },
+            {
+                "id": "cors",
+                "name": "CORS Misconfiguration",
+                "description": "Tests for dangerous CORS configurations allowing credential theft",
+            },
+            {
+                "id": "method_override",
+                "name": "HTTP Method Override",
+                "description": "Checks for method override headers that bypass access controls",
+            },
+            {
+                "id": "cache_poison",
+                "name": "Web Cache Poisoning",
+                "description": "Tests for unkeyed headers that could poison web caches",
+            },
+            {
+                "id": "host_header",
+                "name": "Host Header Injection",
+                "description": "Checks for host header attacks leading to password reset poisoning",
+            },
         ]
     })
 
