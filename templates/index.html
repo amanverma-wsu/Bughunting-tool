@@ -1,0 +1,1259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CVE-2024-41713 Scanner</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-tertiary: #1a1a25;
+            --bg-card: #15151f;
+            --border-color: #2a2a3a;
+            --text-primary: #f0f0f5;
+            --text-secondary: #a0a0b0;
+            --text-muted: #606070;
+            --accent-primary: #00d4ff;
+            --accent-secondary: #7b61ff;
+            --accent-gradient: linear-gradient(135deg, #00d4ff 0%, #7b61ff 100%);
+            --success: #00c853;
+            --danger: #ff4757;
+            --warning: #ffa502;
+            --info: #2ed573;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        /* Header */
+        .header {
+            text-align: center;
+            padding: 40px 20px;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 30px;
+        }
+
+        .logo {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 2.5rem;
+            font-weight: 600;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            color: var(--text-secondary);
+            font-size: 1rem;
+        }
+
+        .version {
+            display: inline-block;
+            background: var(--bg-tertiary);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            color: var(--accent-primary);
+            margin-top: 10px;
+        }
+
+        /* Main Layout */
+        .main-grid {
+            display: grid;
+            grid-template-columns: 400px 1fr;
+            gap: 30px;
+        }
+
+        @media (max-width: 1024px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Cards */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            overflow: hidden;
+        }
+
+        .card-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .card-header i {
+            color: var(--accent-primary);
+            font-size: 1.2rem;
+        }
+
+        .card-header h2 {
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        .card-body {
+            padding: 20px;
+        }
+
+        /* Form Elements */
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            font-weight: 500;
+        }
+
+        .form-input, .form-textarea, .form-select {
+            width: 100%;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 12px 16px;
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+        }
+
+        .form-input:focus, .form-textarea:focus, .form-select:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.1);
+        }
+
+        .form-textarea {
+            min-height: 120px;
+            resize: vertical;
+        }
+
+        .form-hint {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 6px;
+        }
+
+        /* Checkbox */
+        .checkbox-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .checkbox-label input {
+            width: 18px;
+            height: 18px;
+            accent-color: var(--accent-primary);
+        }
+
+        /* Collapsible */
+        .collapsible {
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            margin-bottom: 15px;
+            overflow: hidden;
+        }
+
+        .collapsible-header {
+            padding: 12px 16px;
+            background: var(--bg-secondary);
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+        }
+
+        .collapsible-header:hover {
+            background: var(--bg-tertiary);
+        }
+
+        .collapsible-content {
+            padding: 16px;
+            display: none;
+        }
+
+        .collapsible.active .collapsible-content {
+            display: block;
+        }
+
+        .collapsible.active .collapsible-icon {
+            transform: rotate(180deg);
+        }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-family: 'Inter', sans-serif;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: var(--accent-gradient);
+            color: white;
+            width: 100%;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(0, 212, 255, 0.3);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-sm {
+            padding: 8px 16px;
+            font-size: 0.8rem;
+        }
+
+        /* Stats Cards */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            margin-top: 5px;
+        }
+
+        .stat-card.vulnerable .stat-value { color: var(--danger); }
+        .stat-card.safe .stat-value { color: var(--success); }
+        .stat-card.errors .stat-value { color: var(--warning); }
+        .stat-card.total .stat-value { color: var(--accent-primary); }
+
+        /* Progress Bar */
+        .progress-section {
+            margin-bottom: 20px;
+        }
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 0.85rem;
+        }
+
+        .progress-bar {
+            height: 8px;
+            background: var(--bg-secondary);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--accent-gradient);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+
+        /* Results Table */
+        .results-section {
+            margin-top: 20px;
+        }
+
+        .results-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .results-filters {
+            display: flex;
+            gap: 10px;
+        }
+
+        .filter-btn {
+            padding: 6px 12px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .filter-btn:hover, .filter-btn.active {
+            background: var(--accent-primary);
+            color: white;
+            border-color: var(--accent-primary);
+        }
+
+        /* Scanner Toggle */
+        .scanner-toggle {
+            display: flex;
+            gap: 10px;
+        }
+
+        .scanner-btn {
+            flex: 1;
+            padding: 12px 16px;
+            background: var(--bg-secondary);
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .scanner-btn:hover:not(.disabled) {
+            border-color: var(--accent-primary);
+            color: var(--text-primary);
+        }
+
+        .scanner-btn.active {
+            background: rgba(0, 212, 255, 0.1);
+            border-color: var(--accent-primary);
+            color: var(--accent-primary);
+        }
+
+        .scanner-btn.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .badge-unavailable {
+            font-size: 0.65rem;
+            background: var(--danger);
+            color: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            margin-left: 4px;
+        }
+
+        .scanner-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+
+        .scanner-badge.nuclei {
+            background: rgba(123, 97, 255, 0.2);
+            color: var(--accent-secondary);
+        }
+
+        .scanner-badge.builtin {
+            background: rgba(0, 212, 255, 0.2);
+            color: var(--accent-primary);
+        }
+
+        .results-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .results-table th,
+        .results-table td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .results-table th {
+            background: var(--bg-secondary);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+
+        .results-table tr:hover {
+            background: var(--bg-secondary);
+        }
+
+        .results-table td {
+            font-size: 0.85rem;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .status-badge.vulnerable {
+            background: rgba(255, 71, 87, 0.15);
+            color: var(--danger);
+        }
+
+        .status-badge.safe {
+            background: rgba(0, 200, 83, 0.15);
+            color: var(--success);
+        }
+
+        .status-badge.error {
+            background: rgba(255, 165, 2, 0.15);
+            color: var(--warning);
+        }
+
+        .target-cell {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .payload-cell {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+
+        .empty-state i {
+            font-size: 3rem;
+            margin-bottom: 20px;
+            opacity: 0.3;
+        }
+
+        /* Export Menu */
+        .export-menu {
+            position: relative;
+            display: inline-block;
+        }
+
+        .export-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 8px;
+            display: none;
+            min-width: 120px;
+            z-index: 100;
+        }
+
+        .export-dropdown.show {
+            display: block;
+        }
+
+        .export-dropdown a {
+            display: block;
+            padding: 8px 12px;
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.85rem;
+            border-radius: 4px;
+        }
+
+        .export-dropdown a:hover {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        /* Toast Notifications */
+        .toast-container {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+        }
+
+        .toast {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 16px 20px;
+            margin-top: 10px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            animation: slideIn 0.3s ease;
+        }
+
+        .toast.success { border-left: 3px solid var(--success); }
+        .toast.error { border-left: 3px solid var(--danger); }
+        .toast.warning { border-left: 3px solid var(--warning); }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        /* Scan Status */
+        .scan-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 16px;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--text-muted);
+        }
+
+        .status-indicator.running {
+            background: var(--accent-primary);
+            animation: pulse 1s infinite;
+        }
+
+        .status-indicator.completed {
+            background: var(--success);
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--bg-secondary);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-muted);
+        }
+
+        /* Grid System */
+        .row {
+            display: flex;
+            gap: 15px;
+        }
+
+        .col-6 {
+            flex: 1;
+        }
+
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            
+            .row {
+                flex-direction: column;
+            }
+        }
+
+        /* Live Feed */
+        .live-feed {
+            max-height: 300px;
+            overflow-y: auto;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 12px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+        }
+
+        .feed-item {
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .feed-item:last-child {
+            border-bottom: none;
+        }
+
+        .feed-time {
+            color: var(--text-muted);
+            font-size: 0.7rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1 class="logo">CVE-2024-41713</h1>
+            <p class="subtitle">Directory Traversal Vulnerability Scanner</p>
+            <span class="version">v{{ version }}</span>
+        </header>
+
+        <!-- Main Content -->
+        <div class="main-grid">
+            <!-- Left Panel - Configuration -->
+            <aside>
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-crosshairs"></i>
+                        <h2>Scan Configuration</h2>
+                    </div>
+                    <div class="card-body">
+                        <form id="scanForm">
+                            <!-- Targets -->
+                            <div class="form-group">
+                                <label class="form-label">Target URLs</label>
+                                <textarea 
+                                    class="form-textarea" 
+                                    id="targets" 
+                                    placeholder="https://example.com&#10;https://target.com:8080&#10;192.168.1.1"
+                                    required
+                                ></textarea>
+                                <p class="form-hint">One URL per line. Supports IP addresses and ports.</p>
+                            </div>
+
+                            <!-- Quick Options -->
+                            <div class="form-group">
+                                <label class="form-label">Quick Options</label>
+                                <div class="checkbox-group">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="noSslVerify">
+                                        Skip SSL Verify
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="allPayloads">
+                                        All Payloads
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="followRedirects">
+                                        Follow Redirects
+                                    </label>
+                                </div>
+                            </div>
+
+                            <!-- Scanner Selection -->
+                            <div class="form-group">
+                                <label class="form-label">Scanner Engine</label>
+                                <div class="scanner-toggle">
+                                    <button type="button" class="scanner-btn active" data-scanner="builtin" id="builtinBtn">
+                                        <i class="fas fa-code"></i> Built-in Scanner
+                                    </button>
+                                    <button type="button" class="scanner-btn {% if not nuclei_available %}disabled{% endif %}" data-scanner="nuclei" id="nucleiBtn" {% if not nuclei_available %}title="Nuclei not installed"{% endif %}>
+                                        <i class="fas fa-atom"></i> Nuclei
+                                        {% if not nuclei_available %}<span class="badge-unavailable">N/A</span>{% endif %}
+                                    </button>
+                                </div>
+                                <input type="hidden" id="useNuclei" value="false">
+                                <p class="form-hint" id="scannerHint">Python-based scanner with multiple payloads</p>
+                            </div>
+
+                            <!-- Advanced Options -->
+                            <div class="collapsible" id="advancedOptions">
+                                <div class="collapsible-header" onclick="toggleCollapsible('advancedOptions')">
+                                    <span><i class="fas fa-sliders-h"></i> Advanced Options</span>
+                                    <i class="fas fa-chevron-down collapsible-icon"></i>
+                                </div>
+                                <div class="collapsible-content">
+                                    <div class="row">
+                                        <div class="col-6">
+                                            <div class="form-group">
+                                                <label class="form-label">Timeout (sec)</label>
+                                                <input type="number" class="form-input" id="timeout" value="10" min="1" max="120">
+                                            </div>
+                                        </div>
+                                        <div class="col-6">
+                                            <div class="form-group">
+                                                <label class="form-label">Rate Limit (sec)</label>
+                                                <input type="number" class="form-input" id="rateLimit" value="0" min="0" max="10" step="0.1">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="row">
+                                        <div class="col-6">
+                                            <div class="form-group">
+                                                <label class="form-label">HTTP Method</label>
+                                                <select class="form-select" id="method">
+                                                    <option value="GET">GET</option>
+                                                    <option value="POST">POST</option>
+                                                    <option value="HEAD">HEAD</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div class="col-6">
+                                            <div class="form-group">
+                                                <label class="form-label">Retries</label>
+                                                <input type="number" class="form-input" id="retries" value="3" min="0" max="10">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">Proxy URL</label>
+                                        <input type="text" class="form-input" id="proxy" placeholder="http://127.0.0.1:8080">
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">User Agent</label>
+                                        <input type="text" class="form-input" id="userAgent" placeholder="Custom User-Agent string">
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">Cookies</label>
+                                        <input type="text" class="form-input" id="cookies" placeholder="session=abc123; token=xyz">
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">Custom Headers</label>
+                                        <textarea class="form-textarea" id="headers" placeholder="Authorization: Bearer token&#10;X-Custom: value" style="min-height: 60px;"></textarea>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Regex Options -->
+                            <div class="collapsible" id="regexOptions">
+                                <div class="collapsible-header" onclick="toggleCollapsible('regexOptions')">
+                                    <span><i class="fas fa-code"></i> Regex Matching</span>
+                                    <i class="fas fa-chevron-down collapsible-icon"></i>
+                                </div>
+                                <div class="collapsible-content">
+                                    <div class="form-group">
+                                        <label class="form-label">Match Regex</label>
+                                        <input type="text" class="form-input" id="matchRegex" placeholder="Custom pattern to match">
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">Exclude Regex</label>
+                                        <input type="text" class="form-input" id="excludeRegex" placeholder="Pattern to exclude from results">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Submit Button -->
+                            <button type="submit" class="btn btn-primary" id="scanBtn">
+                                <i class="fas fa-rocket"></i>
+                                Start Scan
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Right Panel - Results -->
+            <main>
+                <!-- Stats -->
+                <div class="stats-grid">
+                    <div class="stat-card total">
+                        <div class="stat-value" id="statTotal">0</div>
+                        <div class="stat-label">Total</div>
+                    </div>
+                    <div class="stat-card vulnerable">
+                        <div class="stat-value" id="statVulnerable">0</div>
+                        <div class="stat-label">Vulnerable</div>
+                    </div>
+                    <div class="stat-card safe">
+                        <div class="stat-value" id="statSafe">0</div>
+                        <div class="stat-label">Safe</div>
+                    </div>
+                    <div class="stat-card errors">
+                        <div class="stat-value" id="statErrors">0</div>
+                        <div class="stat-label">Errors</div>
+                    </div>
+                </div>
+
+                <!-- Results Card -->
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-list-ul"></i>
+                        <h2>Scan Results</h2>
+                    </div>
+                    <div class="card-body">
+                        <!-- Progress -->
+                        <div class="progress-section" id="progressSection" style="display: none;">
+                            <div class="scan-status">
+                                <div class="status-indicator" id="statusIndicator"></div>
+                                <span id="scanStatusText">Idle</span>
+                                <button class="btn btn-danger btn-sm" id="cancelBtn" style="margin-left: auto; display: none;">
+                                    <i class="fas fa-stop"></i> Cancel
+                                </button>
+                            </div>
+                            <div class="progress-header">
+                                <span id="progressText">0 / 0 targets</span>
+                                <span id="progressPercent">0%</span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                            </div>
+                        </div>
+
+                        <!-- Results Header -->
+                        <div class="results-header" id="resultsHeader" style="display: none;">
+                            <div class="results-filters">
+                                <button class="filter-btn active" data-filter="all">All</button>
+                                <button class="filter-btn" data-filter="vulnerable">Vulnerable</button>
+                                <button class="filter-btn" data-filter="safe">Safe</button>
+                                <button class="filter-btn" data-filter="error">Errors</button>
+                            </div>
+                            <div class="export-menu">
+                                <button class="btn btn-secondary btn-sm" id="exportBtn">
+                                    <i class="fas fa-download"></i> Export
+                                </button>
+                                <div class="export-dropdown" id="exportDropdown">
+                                    <a href="#" onclick="exportResults('json')"><i class="fas fa-file-code"></i> JSON</a>
+                                    <a href="#" onclick="exportResults('csv')"><i class="fas fa-file-csv"></i> CSV</a>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Results Table -->
+                        <div class="results-section">
+                            <div class="empty-state" id="emptyState">
+                                <i class="fas fa-search"></i>
+                                <p>No scan results yet</p>
+                                <p style="font-size: 0.85rem;">Enter targets and click "Start Scan" to begin</p>
+                            </div>
+                            <table class="results-table" id="resultsTable" style="display: none;">
+                                <thead>
+                                    <tr>
+                                        <th>Status</th>
+                                        <th>Target</th>
+                                        <th>Payload</th>
+                                        <th>Server</th>
+                                        <th>WAF</th>
+                                        <th>Time</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="resultsBody">
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script>
+        // State
+        let currentJobId = null;
+        let results = [];
+        let socket = null;
+        let currentFilter = 'all';
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            initSocket();
+            initEventListeners();
+            checkNucleiStatus();
+        });
+
+        // Check Nuclei availability
+        async function checkNucleiStatus() {
+            try {
+                const response = await fetch('/api/nuclei/status');
+                const data = await response.json();
+                const nucleiBtn = document.getElementById('nucleiBtn');
+                
+                if (data.available) {
+                    nucleiBtn.classList.remove('disabled');
+                    nucleiBtn.removeAttribute('title');
+                    nucleiBtn.innerHTML = '<i class="fas fa-atom"></i> Nuclei <span class="scanner-badge">v' + (data.version || '?') + '</span>';
+                } else {
+                    nucleiBtn.classList.add('disabled');
+                    nucleiBtn.title = data.message || 'Nuclei not installed';
+                    nucleiBtn.innerHTML = '<i class="fas fa-atom"></i> Nuclei <span class="badge-unavailable">N/A</span>';
+                }
+            } catch (error) {
+                console.error('Failed to check Nuclei status:', error);
+            }
+        }
+
+        // Socket.IO
+        function initSocket() {
+            socket = io('/scan');
+            
+            socket.on('connect', () => {
+                console.log('WebSocket connected');
+            });
+
+            socket.on('scan_progress', (data) => {
+                if (data.job_id === currentJobId) {
+                    updateProgress(data.progress, data.total);
+                    addResult(data.result);
+                }
+            });
+
+            socket.on('scan_complete', (data) => {
+                if (data.job_id === currentJobId) {
+                    onScanComplete(data);
+                }
+            });
+        }
+
+        // Event Listeners
+        function initEventListeners() {
+            // Form submit
+            document.getElementById('scanForm').addEventListener('submit', startScan);
+            
+            // Cancel button
+            document.getElementById('cancelBtn').addEventListener('click', cancelScan);
+            
+            // Export button
+            document.getElementById('exportBtn').addEventListener('click', (e) => {
+                e.stopPropagation();
+                document.getElementById('exportDropdown').classList.toggle('show');
+            });
+
+            // Close export dropdown on outside click
+            document.addEventListener('click', () => {
+                document.getElementById('exportDropdown').classList.remove('show');
+            });
+
+            // Filter buttons
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    currentFilter = btn.dataset.filter;
+                    renderResults();
+                });
+            });
+
+            // Scanner toggle buttons
+            document.querySelectorAll('.scanner-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    if (btn.classList.contains('disabled')) return;
+                    
+                    document.querySelectorAll('.scanner-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    
+                    const scanner = btn.dataset.scanner;
+                    document.getElementById('useNuclei').value = (scanner === 'nuclei').toString();
+                    
+                    // Update hint text
+                    const hint = document.getElementById('scannerHint');
+                    if (scanner === 'nuclei') {
+                        hint.textContent = 'Using Nuclei engine with YAML template';
+                    } else {
+                        hint.textContent = 'Python-based scanner with multiple payloads';
+                    }
+                });
+            });
+        }
+
+        // Start Scan
+        async function startScan(e) {
+            e.preventDefault();
+            
+            const targets = document.getElementById('targets').value;
+            if (!targets.trim()) {
+                showToast('Please enter at least one target', 'error');
+                return;
+            }
+
+            const config = {
+                targets: targets,
+                timeout: parseInt(document.getElementById('timeout').value),
+                no_ssl_verify: document.getElementById('noSslVerify').checked,
+                all_payloads: document.getElementById('allPayloads').checked,
+                follow_redirects: document.getElementById('followRedirects').checked,
+                rate_limit: parseFloat(document.getElementById('rateLimit').value),
+                method: document.getElementById('method').value,
+                retries: parseInt(document.getElementById('retries').value),
+                proxy: document.getElementById('proxy').value,
+                user_agent: document.getElementById('userAgent').value,
+                cookies: document.getElementById('cookies').value,
+                headers: document.getElementById('headers').value,
+                match_regex: document.getElementById('matchRegex').value,
+                exclude_regex: document.getElementById('excludeRegex').value,
+                use_nuclei: document.getElementById('useNuclei').value === 'true',
+            };
+
+            try {
+                // Reset UI
+                results = [];
+                renderResults();
+                showProgress(true);
+                setScanning(true);
+
+                const response = await fetch('/api/scan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config),
+                });
+
+                const data = await response.json();
+                
+                if (response.ok) {
+                    currentJobId = data.job_id;
+                    socket.emit('subscribe', { job_id: currentJobId });
+                    showToast(`Scan started: ${data.total_targets} targets`, 'success');
+                    updateProgress(0, data.total_targets);
+                } else {
+                    throw new Error(data.error || 'Failed to start scan');
+                }
+            } catch (error) {
+                showToast(error.message, 'error');
+                setScanning(false);
+            }
+        }
+
+        // Cancel Scan
+        async function cancelScan() {
+            if (!currentJobId) return;
+
+            try {
+                await fetch(`/api/scan/${currentJobId}/cancel`, { method: 'POST' });
+                showToast('Scan cancelled', 'warning');
+            } catch (error) {
+                showToast('Failed to cancel scan', 'error');
+            }
+        }
+
+        // Update Progress
+        function updateProgress(current, total) {
+            const percent = total > 0 ? Math.round((current / total) * 100) : 0;
+            document.getElementById('progressText').textContent = `${current} / ${total} targets`;
+            document.getElementById('progressPercent').textContent = `${percent}%`;
+            document.getElementById('progressFill').style.width = `${percent}%`;
+        }
+
+        // Add Result
+        function addResult(result) {
+            results.push(result);
+            updateStats();
+            renderResults();
+        }
+
+        // Update Stats
+        function updateStats() {
+            const vulnerable = results.filter(r => r.vulnerable).length;
+            const errors = results.filter(r => r.error).length;
+            const safe = results.length - vulnerable - errors;
+
+            document.getElementById('statTotal').textContent = results.length;
+            document.getElementById('statVulnerable').textContent = vulnerable;
+            document.getElementById('statSafe').textContent = safe;
+            document.getElementById('statErrors').textContent = errors;
+        }
+
+        // Render Results
+        function renderResults() {
+            const tbody = document.getElementById('resultsBody');
+            const table = document.getElementById('resultsTable');
+            const empty = document.getElementById('emptyState');
+            const header = document.getElementById('resultsHeader');
+
+            let filtered = results;
+            if (currentFilter === 'vulnerable') {
+                filtered = results.filter(r => r.vulnerable);
+            } else if (currentFilter === 'safe') {
+                filtered = results.filter(r => !r.vulnerable && !r.error);
+            } else if (currentFilter === 'error') {
+                filtered = results.filter(r => r.error);
+            }
+
+            if (results.length === 0) {
+                table.style.display = 'none';
+                header.style.display = 'none';
+                empty.style.display = 'block';
+                return;
+            }
+
+            empty.style.display = 'none';
+            table.style.display = 'table';
+            header.style.display = 'flex';
+
+            tbody.innerHTML = filtered.map(r => {
+                let status, statusClass;
+                if (r.vulnerable) {
+                    status = 'VULNERABLE';
+                    statusClass = 'vulnerable';
+                } else if (r.error) {
+                    status = 'ERROR';
+                    statusClass = 'error';
+                } else {
+                    status = 'SAFE';
+                    statusClass = 'safe';
+                }
+
+                return `
+                    <tr>
+                        <td><span class="status-badge ${statusClass}"><i class="fas fa-${r.vulnerable ? 'exclamation-triangle' : r.error ? 'times' : 'check'}"></i> ${status}</span></td>
+                        <td class="target-cell" title="${r.target}">${r.target}</td>
+                        <td class="payload-cell" title="${r.payload || '-'}">${r.payload || '-'}</td>
+                        <td>${r.server_header || '-'}</td>
+                        <td>${r.waf_detected || '-'}</td>
+                        <td>${r.response_time ? r.response_time.toFixed(2) + 's' : '-'}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // On Scan Complete
+        function onScanComplete(data) {
+            setScanning(false);
+            updateStats();
+            
+            const status = data.status === 'cancelled' ? 'cancelled' : 'completed';
+            const msg = `Scan ${status}: ${data.summary.vulnerable} vulnerable, ${data.summary.safe} safe`;
+            showToast(msg, data.summary.vulnerable > 0 ? 'warning' : 'success');
+        }
+
+        // UI Helpers
+        function showProgress(show) {
+            document.getElementById('progressSection').style.display = show ? 'block' : 'none';
+        }
+
+        function setScanning(scanning) {
+            const btn = document.getElementById('scanBtn');
+            const cancelBtn = document.getElementById('cancelBtn');
+            const indicator = document.getElementById('statusIndicator');
+            const statusText = document.getElementById('scanStatusText');
+
+            btn.disabled = scanning;
+            btn.innerHTML = scanning 
+                ? '<i class="fas fa-spinner fa-spin"></i> Scanning...' 
+                : '<i class="fas fa-rocket"></i> Start Scan';
+            
+            cancelBtn.style.display = scanning ? 'inline-flex' : 'none';
+            indicator.className = `status-indicator ${scanning ? 'running' : 'completed'}`;
+            statusText.textContent = scanning ? 'Scanning...' : 'Completed';
+        }
+
+        function toggleCollapsible(id) {
+            document.getElementById(id).classList.toggle('active');
+        }
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.innerHTML = `
+                <i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle'}"></i>
+                <span>${message}</span>
+            `;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 5000);
+        }
+
+        // Export
+        function exportResults(format) {
+            if (!currentJobId || results.length === 0) {
+                showToast('No results to export', 'error');
+                return;
+            }
+            window.location.href = `/api/scan/${currentJobId}/export?format=${format}`;
+            document.getElementById('exportDropdown').classList.remove('show');
+        }
+    </script>
+</body>
+</html>

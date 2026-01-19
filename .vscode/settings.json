@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^cd /Users/aman/CVE-2024-41713-Scan && source \\.venv/bin/activate && python << 'EOF'\nprint\\(\"=\" \\* 50\\)\nprint\\(\"BugHunter Pre-Flight Check\"\\)\nprint\\(\"=\" \\* 50\\)\n\nfrom subdomain_enum import SubdomainEnumerator, check_tools_installed\nfrom full_nuclei_scanner import NucleiScanner, check_nuclei_installed, get_template_count\nfrom bughunter import BugHunter\nprint\\(\"\\[PASS\\] All Python imports work\"\\)\n\ntools = check_tools_installed\\(\\)\nnuclei_ok = check_nuclei_installed\\(\\)\nsubfinder_status = \"PASS\" if tools\\[\"subfinder\"\\] else \"WARN\"\nnuclei_status = \"PASS\" if nuclei_ok else \"FAIL\"\nprint\\(f\"\\[\\{subfinder_status\\}\\] Subfinder: \\{'installed' if tools\\['subfinder'\\] else 'not found'\\}\"\\)\nprint\\(f\"\\[\\{nuclei_status\\}\\] Nuclei: \\{'installed' if nuclei_ok else 'not found'\\}\"\\)\n\ncount = get_template_count\\(\\)\ntemplate_status = \"PASS\" if count > 0 else \"FAIL\"\nprint\\(f\"\\[\\{template_status\\}\\] Nuclei templates: \\{count\\}\"\\)\n\nfrom bughunter_web import app\nprint\\(f\"\\[PASS\\] Web app: \\{len\\(app\\.url_map\\._rules\\)\\} routes\"\\)\n\nprint\\(\"=\" \\* 50\\)\nprint\\(\"All checks passed! Ready to hunt bugs\\.\"\\)\nprint\\(\"=\" \\* 50\\)\nEOF$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

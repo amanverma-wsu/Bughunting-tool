@@ -1,0 +1,21 @@
+# BugHunter - Comprehensive Vulnerability Scanner
+
+# Core HTTP
+requests>=2.28.0
+urllib3>=1.26.0
+
+# Web Application
+flask>=2.3.0
+flask-socketio>=5.3.0
+gevent>=23.0.0
+gevent-websocket>=0.10.1
+
+# Production server
+gunicorn>=21.0.0
+eventlet>=0.33.0
+
+# DNS
+dnspython>=2.4.0
+
+# For CSV export
+# csv is built-in
