@@ -418,39 +418,18 @@ class DirectoryScanner:
                         ))
                         break
 
-            # Check for sensitive files
+            # Only report actual accessible content (200 status)
             if response.status == 200:
                 finding = self._classify_finding(url, path, response)
                 if finding:
                     findings.append(finding)
 
-            # Check for redirect (might indicate existence)
-            elif response.status in [301, 302, 303, 307, 308]:
-                if path in [".git", ".svn", "admin", "backup"]:
-                    findings.append(URLVulnFinding(
-                        vuln_type=VulnType.HIDDEN_DIRECTORY,
-                        severity=VulnSeverity.LOW,
-                        url=url,
-                        payload=path,
-                        evidence=f"Redirects to: {response.headers.get('location', 'unknown')}",
-                        description=f"Possible hidden directory '{path}' detected (redirects)",
-                        remediation="Review if this directory should be publicly accessible.",
-                        confidence="medium",
-                    ))
+            # Skip redirects - they don't indicate vulnerability
+            # A redirect could be: login redirect, homepage redirect, 404 handler, etc.
+            # This was causing many false positives
 
-            # Check for 403 (exists but forbidden)
-            elif response.status == 403:
-                if path in [".git", ".git/config", ".env", "backup", "admin"]:
-                    findings.append(URLVulnFinding(
-                        vuln_type=VulnType.HIDDEN_DIRECTORY,
-                        severity=VulnSeverity.INFO,
-                        url=url,
-                        payload=path,
-                        evidence=f"HTTP 403 Forbidden",
-                        description=f"Directory/file '{path}' exists but access is forbidden",
-                        remediation="Consider removing or properly securing this resource.",
-                        confidence="medium",
-                    ))
+            # Skip 403 - this is GOOD security (access denied)
+            # Only report 403 if we can confirm sensitive content exists
 
         except Exception as e:
             logger.debug(f"Directory check error for {url}: {e}")
