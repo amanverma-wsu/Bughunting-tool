@@ -842,6 +842,19 @@
                     setScanning(false);
                 }
             });
+
+            socket.on('progress', (data) => {
+                if (data.job_id === currentJobId) {
+                    updateProgressBar(data.progress);
+                }
+            });
+
+            socket.on('scan_cancelled', (data) => {
+                if (data.job_id === currentJobId) {
+                    setScanning(false);
+                    showToast('Scan cancelled', 'info');
+                }
+            });
         }
 
         // Event Listeners
@@ -1068,6 +1081,12 @@
         function updateProgress(data) {
             document.getElementById('phaseText').textContent = data.phase || 'Running...';
             document.getElementById('progressMessage').textContent = data.message || '';
+        }
+
+        // Update progress bar
+        function updateProgressBar(progress) {
+            document.getElementById('progressBar').style.width = progress + '%';
+            document.getElementById('progressPercent').textContent = progress + '%';
         }
 
         // On complete

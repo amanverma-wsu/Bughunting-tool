@@ -74,6 +74,7 @@ class ScanJob:
     phase_percent: float = 0.0  # Current phase percentage
     started_at: str = field(default_factory=lambda: datetime.now().isoformat())
     completed_at: Optional[str] = None
+    should_stop: bool = False
 
     # Results
     subdomains: List[dict] = field(default_factory=list)
@@ -119,6 +120,12 @@ def run_scan_job(job: ScanJob):
         config = job.config
         all_targets = set()
         
+        # Check if cancellation requested
+        if job.should_stop:
+            job.status = "cancelled"
+            emit_update(job, "Scan cancelled by user")
+            return
+        
         # Phase 1: Subdomain Enumeration
         if not config.get("skip_enum", False):
             job.phase = "enumeration"
@@ -154,6 +161,12 @@ def run_scan_job(job: ScanJob):
             
             subdomains = enumerator.enumerate(job.domain, config.get("sources"))
             
+            # Check if cancellation requested during enumeration
+            if job.should_stop:
+                job.status = "cancelled"
+                emit_update(job, "Scan cancelled by user during enumeration")
+                return
+            
             # Collect targets
             for sub in subdomains:
                 if sub.is_alive:
@@ -182,6 +195,12 @@ def run_scan_job(job: ScanJob):
         
         job.total = len(all_targets)
         
+        # Check if cancellation requested before Nuclei
+        if job.should_stop:
+            job.status = "cancelled"
+            emit_update(job, "Scan cancelled by user before Nuclei scan")
+            return
+        
         # Phase 2: Nuclei Scanning
         if not config.get("skip_nuclei", False) and check_nuclei_installed():
             job.phase = "nuclei"
@@ -200,6 +219,10 @@ def run_scan_job(job: ScanJob):
 
             def progress_callback(progress: ScanProgress):
                 """Emit detailed progress updates for Nuclei scan."""
+                # Check if cancellation requested
+                if job.should_stop:
+                    raise KeyboardInterrupt("Scan cancelled by user")
+
                 # Update job's overall progress based on Nuclei phase progress
                 job.update_phase_progress("nuclei", progress.percent_complete)
 
@@ -235,6 +258,11 @@ def run_scan_job(job: ScanJob):
             # Run scan
             targets_list = list(all_targets)
             for finding in scanner.scan(targets_list):
+                # Check cancellation during scan
+                if job.should_stop:
+                    job.status = "cancelled"
+                    emit_update(job, "Scan cancelled by user during Nuclei scan")
+                    return
                 pass  # Callback handles everything
 
         # Phase 3: Advanced Checks (JS secrets, CORS, API discovery, etc.)
@@ -815,7 +843,16 @@ def cancel_scan(job_id: str):
     if not job:
         return jsonify({"error": "Job not found"}), 404
     
+    # Set the cancellation flag
+    job.should_stop = True
     job.status = "cancelled"
+    
+    # Emit WebSocket event to notify client
+    socketio.emit("scan_cancelled", {
+        "job_id": job_id,
+        "message": "Scan cancelled by user"
+    }, namespace="/scan")
+    
     return jsonify({"status": "cancelled"})
 
 
