@@ -686,6 +686,29 @@ Examples:
     
     args = parser.parse_args()
     
+    # Create output directory with domain name
+    domain_dir = args.domain.replace(".", "_")
+    output_dir = Path(domain_dir)
+    output_dir.mkdir(exist_ok=True)
+    
+    # Update output paths to use domain directory
+    if args.output:
+        args.output = str(output_dir / args.output)
+    else:
+        args.output = str(output_dir / f"{domain_dir}_report.html")
+    
+    if args.json_output:
+        args.json_output = str(output_dir / args.json_output)
+    else:
+        args.json_output = str(output_dir / f"{domain_dir}_report.json")
+    
+    if args.csv:
+        args.csv = str(output_dir / args.csv)
+    else:
+        args.csv = str(output_dir / f"{domain_dir}_findings.csv")
+    
+    print(f"\n📁 Output directory: {Colors.CYAN}{output_dir}{Colors.RESET}\n")
+    
     # Print banner
     print_banner()
     
