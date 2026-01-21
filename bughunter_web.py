@@ -26,6 +26,33 @@ from full_nuclei_scanner import (
 )
 from advanced_checks import AdvancedScanner, AdvancedFinding
 
+# Import new scanning modules (with availability checks)
+try:
+    from logic_checks import LogicScanner, LogicFinding
+    LOGIC_CHECKS_AVAILABLE = True
+except ImportError:
+    LOGIC_CHECKS_AVAILABLE = False
+
+try:
+    from cloud_checks import CloudSecurityScanner, CloudFinding
+    CLOUD_CHECKS_AVAILABLE = True
+except ImportError:
+    CLOUD_CHECKS_AVAILABLE = False
+
+try:
+    from url_vuln_scanner import URLVulnScanner, URLVulnFinding
+    URL_VULN_AVAILABLE = True
+except ImportError:
+    URL_VULN_AVAILABLE = False
+
+try:
+    from scan_prioritizer import ScanPrioritizer, TargetClassification
+    PRIORITIZER_AVAILABLE = True
+except ImportError:
+    PRIORITIZER_AVAILABLE = False
+
+import asyncio
+
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.urandom(24)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
@@ -53,6 +80,9 @@ class ScanJob:
     interesting_subdomains: List[dict] = field(default_factory=list)
     findings: List[dict] = field(default_factory=list)
     advanced_findings: List[dict] = field(default_factory=list)
+    logic_findings: List[dict] = field(default_factory=list)
+    cloud_findings: List[dict] = field(default_factory=list)
+    url_vuln_findings: List[dict] = field(default_factory=list)
 
     # Config
     config: dict = field(default_factory=dict)
@@ -61,11 +91,13 @@ class ScanJob:
     stats: dict = field(default_factory=dict)
 
     # Phase weights for overall progress calculation
-    # Enum: 20%, Nuclei: 60%, Advanced: 20%
+    # Enum: 15%, Nuclei: 45%, Advanced: 15%, Logic+Cloud: 10%, URL Vuln: 15%
     PHASE_WEIGHTS = {
-        "enumeration": (0, 20),      # 0-20%
-        "nuclei": (20, 80),          # 20-80%
-        "advanced": (80, 100),       # 80-100%
+        "enumeration": (0, 15),       # 0-15%
+        "nuclei": (15, 60),           # 15-60%
+        "advanced": (60, 75),         # 60-75%
+        "logic_cloud": (75, 85),      # 75-85%
+        "url_vuln": (85, 100),        # 85-100%
     }
 
     def update_phase_progress(self, phase: str, phase_percent: float):
@@ -255,6 +287,143 @@ def run_scan_job(job: ScanJob):
 
             adv_scanner.scan(list(set(adv_targets)), adv_checks)
 
+        # Phase 4: Logic and Cloud Checks (run in parallel)
+        logic_enabled = LOGIC_CHECKS_AVAILABLE and not config.get("skip_logic", False)
+        cloud_enabled = CLOUD_CHECKS_AVAILABLE and not config.get("skip_cloud", False)
+
+        if logic_enabled or cloud_enabled:
+            job.phase = "logic_cloud"
+            emit_update(job, "Running logic and cloud security checks...")
+
+            # Prepare targets for these checks
+            check_targets = [f"https://{job.domain}", f"http://{job.domain}"]
+            for sub in job.interesting_subdomains[:5]:
+                if sub.get("url"):
+                    check_targets.append(sub["url"])
+
+            async def run_logic_cloud_checks():
+                tasks = []
+
+                # Logic checks
+                if logic_enabled:
+                    async def do_logic_checks():
+                        logic_scanner = LogicScanner(
+                            timeout=config.get("timeout", 10),
+                            proxy=config.get("proxy"),
+                        )
+
+                        logic_checks_list = config.get("logic_checks") or ["jwt", "oauth", "password_reset"]
+
+                        async for finding in logic_scanner.scan(check_targets, logic_checks_list):
+                            finding_dict = finding.to_dict()
+                            job.logic_findings.append(finding_dict)
+                            socketio.emit("logic_finding", {
+                                "job_id": job.job_id,
+                                "finding": finding_dict,
+                                "total_logic": len(job.logic_findings),
+                            }, namespace="/scan")
+
+                    tasks.append(do_logic_checks())
+
+                # Cloud checks
+                if cloud_enabled:
+                    async def do_cloud_checks():
+                        cloud_scanner = CloudSecurityScanner(
+                            timeout=config.get("timeout", 10),
+                        )
+
+                        cloud_checks_list = config.get("cloud_checks") or ["s3", "azure", "gcp"]
+
+                        async for finding in cloud_scanner.scan(job.domain, cloud_checks_list):
+                            finding_dict = finding.to_dict()
+                            job.cloud_findings.append(finding_dict)
+                            socketio.emit("cloud_finding", {
+                                "job_id": job.job_id,
+                                "finding": finding_dict,
+                                "total_cloud": len(job.cloud_findings),
+                            }, namespace="/scan")
+
+                    tasks.append(do_cloud_checks())
+
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Run async checks
+            try:
+                asyncio.run(run_logic_cloud_checks())
+            except RuntimeError:
+                # If event loop is already running, use a different approach
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(run_logic_cloud_checks())
+                finally:
+                    loop.close()
+
+            job.update_phase_progress("logic_cloud", 100)
+            emit_update(job, f"Found {len(job.logic_findings)} logic issues, {len(job.cloud_findings)} cloud issues")
+
+        # Phase 5: URL Vulnerability Checks
+        if URL_VULN_AVAILABLE and not config.get("skip_url_vuln", False):
+            job.phase = "url_vuln"
+            emit_update(job, "Running URL vulnerability scans...")
+
+            # Collect URLs for scanning
+            url_targets = list(all_targets)
+
+            async def run_url_vuln_checks():
+                url_scanner = URLVulnScanner(
+                    timeout=config.get("timeout", 10),
+                    proxy=config.get("proxy"),
+                )
+
+                url_checks = config.get("url_checks") or ["lfi", "dirs", "backups", "configs"]
+
+                def url_finding_callback(finding):
+                    finding_dict = finding.to_dict()
+                    job.url_vuln_findings.append(finding_dict)
+                    socketio.emit("url_vuln_finding", {
+                        "job_id": job.job_id,
+                        "finding": finding_dict,
+                        "total_url_vuln": len(job.url_vuln_findings),
+                    }, namespace="/scan")
+
+                def url_progress_callback(current, total, check_name):
+                    percent = (current / total * 100) if total > 0 else 0
+                    job.update_phase_progress("url_vuln", percent)
+                    socketio.emit("url_vuln_progress", {
+                        "job_id": job.job_id,
+                        "check_name": check_name,
+                        "current": current,
+                        "total": total,
+                        "percent_complete": job.percent_complete,
+                    }, namespace="/scan")
+
+                await url_scanner.scan(
+                    urls=url_targets[:50],  # Limit to top 50 URLs
+                    check_lfi="lfi" in url_checks,
+                    check_dirs="dirs" in url_checks,
+                    check_backups="backups" in url_checks,
+                    check_configs="configs" in url_checks,
+                    concurrency=config.get("url_vuln_threads", 5),
+                    finding_callback=url_finding_callback,
+                    progress_callback=url_progress_callback,
+                )
+
+            # Run async URL vuln checks
+            try:
+                asyncio.run(run_url_vuln_checks())
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(run_url_vuln_checks())
+                finally:
+                    loop.close()
+
+            job.update_phase_progress("url_vuln", 100)
+            emit_update(job, f"Found {len(job.url_vuln_findings)} URL vulnerabilities")
+
         # Finalize
         job.phase = "complete"
         job.status = "completed"
@@ -275,6 +444,30 @@ def run_scan_job(job: ScanJob):
             if key in adv_severity_counts:
                 adv_severity_counts[key] += 1
 
+        # Count logic finding severities
+        logic_severity_counts = {"logic_critical": 0, "logic_high": 0, "logic_medium": 0, "logic_low": 0}
+        for f in job.logic_findings:
+            sev = f.get("severity", "low")
+            key = f"logic_{sev}"
+            if key in logic_severity_counts:
+                logic_severity_counts[key] += 1
+
+        # Count cloud finding severities
+        cloud_severity_counts = {"cloud_critical": 0, "cloud_high": 0, "cloud_medium": 0, "cloud_low": 0}
+        for f in job.cloud_findings:
+            sev = f.get("severity", "low")
+            key = f"cloud_{sev}"
+            if key in cloud_severity_counts:
+                cloud_severity_counts[key] += 1
+
+        # Count URL vuln finding severities
+        url_vuln_severity_counts = {"url_critical": 0, "url_high": 0, "url_medium": 0, "url_low": 0}
+        for f in job.url_vuln_findings:
+            sev = f.get("severity", "low")
+            key = f"url_{sev}"
+            if key in url_vuln_severity_counts:
+                url_vuln_severity_counts[key] += 1
+
         job.stats = {
             "subdomains_total": len(job.subdomains),
             "subdomains_alive": len([s for s in job.subdomains if s.get("is_alive")]),
@@ -282,8 +475,14 @@ def run_scan_job(job: ScanJob):
             "targets_scanned": len(all_targets),
             "findings_total": len(job.findings),
             "advanced_findings_total": len(job.advanced_findings),
+            "logic_findings_total": len(job.logic_findings),
+            "cloud_findings_total": len(job.cloud_findings),
+            "url_vuln_findings_total": len(job.url_vuln_findings),
             **severity_counts,
             **adv_severity_counts,
+            **logic_severity_counts,
+            **cloud_severity_counts,
+            **url_vuln_severity_counts,
         }
         
         socketio.emit("scan_complete", {
@@ -355,6 +554,10 @@ def index():
         nuclei_version=get_nuclei_version() if check_nuclei_installed() else None,
         template_count=get_template_count() if check_nuclei_installed() else 0,
         tools=check_tools_installed(),
+        logic_checks_available=LOGIC_CHECKS_AVAILABLE,
+        cloud_checks_available=CLOUD_CHECKS_AVAILABLE,
+        url_vuln_available=URL_VULN_AVAILABLE,
+        prioritizer_available=PRIORITIZER_AVAILABLE,
     )
 
 
@@ -395,6 +598,15 @@ def start_scan():
             "additional_targets": data.get("additional_targets", []),
             "skip_advanced": data.get("skip_advanced", False),
             "advanced_checks": data.get("advanced_checks"),  # List of checks to run
+            # New check options
+            "skip_logic": data.get("skip_logic", False),
+            "logic_checks": data.get("logic_checks"),  # List: jwt, oauth, password_reset
+            "skip_cloud": data.get("skip_cloud", False),
+            "cloud_checks": data.get("cloud_checks"),  # List: s3, azure, gcp
+            "skip_url_vuln": data.get("skip_url_vuln", False),
+            "url_checks": data.get("url_checks"),  # List: lfi, dirs, backups, configs
+            "url_vuln_threads": int(data.get("url_vuln_threads", 5)),
+            "use_prioritizer": data.get("use_prioritizer", False),
         },
     )
     
@@ -485,6 +697,10 @@ def export_report(job_id: str):
         "subdomains": job.subdomains,
         "interesting_subdomains": job.interesting_subdomains,
         "findings": job.findings,
+        "advanced_findings": job.advanced_findings,
+        "logic_findings": job.logic_findings,
+        "cloud_findings": job.cloud_findings,
+        "url_vuln_findings": job.url_vuln_findings,
     }
     
     if format_type == "json":
@@ -518,11 +734,11 @@ def export_report(job_id: str):
     elif format_type == "csv":
         import csv
         import io
-        
+
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(["Type", "Severity", "Template/Subdomain", "Target/URL", "Details"])
-        
+
         # Add subdomains
         for s in job.subdomains:
             writer.writerow([
@@ -532,17 +748,57 @@ def export_report(job_id: str):
                 s.get("url", ""),
                 ", ".join(s.get("categories", [])),
             ])
-        
-        # Add findings
+
+        # Add Nuclei findings
         for f in job.findings:
             writer.writerow([
-                "finding",
+                "nuclei",
                 f.get("severity", "info"),
                 f.get("template_id"),
                 f.get("matched_at"),
                 f.get("description", "")[:100],
             ])
-        
+
+        # Add advanced findings
+        for f in job.advanced_findings:
+            writer.writerow([
+                "advanced",
+                f.get("severity", "info"),
+                f.get("check_type"),
+                f.get("url"),
+                f.get("description", "")[:100],
+            ])
+
+        # Add logic findings
+        for f in job.logic_findings:
+            writer.writerow([
+                "logic",
+                f.get("severity", "info"),
+                f.get("check_type"),
+                f.get("url"),
+                f.get("description", "")[:100],
+            ])
+
+        # Add cloud findings
+        for f in job.cloud_findings:
+            writer.writerow([
+                "cloud",
+                f.get("severity", "info"),
+                f.get("provider"),
+                f.get("resource"),
+                f.get("description", "")[:100],
+            ])
+
+        # Add URL vulnerability findings
+        for f in job.url_vuln_findings:
+            writer.writerow([
+                "url_vuln",
+                f.get("severity", "info"),
+                f.get("vuln_type"),
+                f.get("url"),
+                f.get("description", "")[:100],
+            ])
+
         output.seek(0)
         return output.getvalue(), 200, {
             "Content-Type": "text/csv",
@@ -574,6 +830,12 @@ def get_system_status():
         },
         "tools": check_tools_installed(),
         "active_scans": len([j for j in active_scans.values() if j.status == "running"]),
+        "modules": {
+            "logic_checks": LOGIC_CHECKS_AVAILABLE,
+            "cloud_checks": CLOUD_CHECKS_AVAILABLE,
+            "url_vuln": URL_VULN_AVAILABLE,
+            "prioritizer": PRIORITIZER_AVAILABLE,
+        },
     })
 
 
@@ -658,6 +920,155 @@ def get_advanced_checks():
     })
 
 
+@app.route("/api/scan/<job_id>/logic", methods=["GET"])
+def get_logic_findings(job_id: str):
+    """Get logic vulnerability findings (JWT, OAuth, Password Reset)."""
+    job = active_scans.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+
+    severity = request.args.get("severity")
+    check_type = request.args.get("check_type")
+
+    findings = job.logic_findings
+    if severity:
+        findings = [f for f in findings if f.get("severity") == severity]
+    if check_type:
+        findings = [f for f in findings if f.get("check_type") == check_type]
+
+    return jsonify({
+        "total": len(job.logic_findings),
+        "filtered": len(findings),
+        "findings": findings,
+    })
+
+
+@app.route("/api/scan/<job_id>/cloud", methods=["GET"])
+def get_cloud_findings(job_id: str):
+    """Get cloud security findings (S3, Azure, GCP)."""
+    job = active_scans.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+
+    severity = request.args.get("severity")
+    provider = request.args.get("provider")
+
+    findings = job.cloud_findings
+    if severity:
+        findings = [f for f in findings if f.get("severity") == severity]
+    if provider:
+        findings = [f for f in findings if f.get("provider") == provider]
+
+    return jsonify({
+        "total": len(job.cloud_findings),
+        "filtered": len(findings),
+        "findings": findings,
+    })
+
+
+@app.route("/api/scan/<job_id>/url-vuln", methods=["GET"])
+def get_url_vuln_findings(job_id: str):
+    """Get URL vulnerability findings (LFI, Directory Enum, etc.)."""
+    job = active_scans.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+
+    severity = request.args.get("severity")
+    vuln_type = request.args.get("vuln_type")
+
+    findings = job.url_vuln_findings
+    if severity:
+        findings = [f for f in findings if f.get("severity") == severity]
+    if vuln_type:
+        findings = [f for f in findings if f.get("vuln_type") == vuln_type]
+
+    return jsonify({
+        "total": len(job.url_vuln_findings),
+        "filtered": len(findings),
+        "findings": findings,
+    })
+
+
+@app.route("/api/logic/checks", methods=["GET"])
+def get_logic_checks():
+    """Get available logic vulnerability checks."""
+    return jsonify({
+        "available": LOGIC_CHECKS_AVAILABLE,
+        "checks": [
+            {
+                "id": "jwt",
+                "name": "JWT Security Analysis",
+                "description": "Tests for JWT algorithm confusion, weak secrets, and signature bypass",
+            },
+            {
+                "id": "oauth",
+                "name": "OAuth Redirect Bypass",
+                "description": "Checks for OAuth redirect_uri bypass and open redirect vulnerabilities",
+            },
+            {
+                "id": "password_reset",
+                "name": "Password Reset Poisoning",
+                "description": "Tests for Host header injection in password reset flows",
+            },
+        ]
+    })
+
+
+@app.route("/api/cloud/checks", methods=["GET"])
+def get_cloud_checks():
+    """Get available cloud security checks."""
+    return jsonify({
+        "available": CLOUD_CHECKS_AVAILABLE,
+        "checks": [
+            {
+                "id": "s3",
+                "name": "AWS S3 Bucket Security",
+                "description": "Checks for misconfigured S3 buckets and potential takeover",
+            },
+            {
+                "id": "azure",
+                "name": "Azure Blob Storage",
+                "description": "Scans for exposed Azure Blob storage containers",
+            },
+            {
+                "id": "gcp",
+                "name": "GCP Storage Buckets",
+                "description": "Checks for misconfigured Google Cloud Storage buckets",
+            },
+        ]
+    })
+
+
+@app.route("/api/url-vuln/checks", methods=["GET"])
+def get_url_vuln_checks():
+    """Get available URL vulnerability checks."""
+    return jsonify({
+        "available": URL_VULN_AVAILABLE,
+        "checks": [
+            {
+                "id": "lfi",
+                "name": "Local File Inclusion",
+                "description": "Tests for path traversal and file inclusion vulnerabilities",
+            },
+            {
+                "id": "dirs",
+                "name": "Directory Enumeration",
+                "description": "Discovers hidden directories, admin panels, and sensitive paths",
+            },
+            {
+                "id": "backups",
+                "name": "Backup File Discovery",
+                "description": "Finds exposed backup files, archives, and database dumps",
+            },
+            {
+                "id": "configs",
+                "name": "Config File Exposure",
+                "description": "Detects exposed configuration files (.env, .git, etc.)",
+            },
+        ]
+    })
+
+
 # ===================== WebSocket Events =====================
 
 @socketio.on("connect", namespace="/scan")
@@ -680,7 +1091,13 @@ if __name__ == "__main__":
     print(f"Nuclei: {'✓ Available' if check_nuclei_installed() else '✗ Not installed'}")
     if check_nuclei_installed():
         print(f"Templates: {get_template_count():,}")
+    print("-" * 50)
+    print("Additional Modules:")
+    print(f"  Logic Checks:  {'✓' if LOGIC_CHECKS_AVAILABLE else '✗'} (JWT, OAuth, Password Reset)")
+    print(f"  Cloud Checks:  {'✓' if CLOUD_CHECKS_AVAILABLE else '✗'} (S3, Azure, GCP)")
+    print(f"  URL Vuln:      {'✓' if URL_VULN_AVAILABLE else '✗'} (LFI, Dir Enum, Backups)")
+    print(f"  Prioritizer:   {'✓' if PRIORITIZER_AVAILABLE else '✗'} (Smart target classification)")
     print("=" * 50)
     print("\nStarting server on http://127.0.0.1:5001\n")
-    
+
     socketio.run(app, host="0.0.0.0", port=5001, debug=True)
