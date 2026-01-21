@@ -1,6 +1,6 @@
 # BugHunter
 
-A comprehensive vulnerability scanning toolkit for security researchers and penetration testers. BugHunter combines subdomain enumeration, Nuclei template scanning, and custom vulnerability checks into a single powerful tool.
+A comprehensive vulnerability scanning toolkit for security researchers and penetration testers. BugHunter combines subdomain enumeration, Nuclei template scanning, and custom vulnerability checks into a single powerful CLI tool.
 
 ## Features
 
@@ -17,10 +17,6 @@ A comprehensive vulnerability scanning toolkit for security researchers and pene
 | **Logic Checks** | Business logic vulnerabilities | JWT algorithm confusion, OAuth redirect bypass, password reset poisoning |
 | **Cloud Checks** | Cloud security misconfigurations | AWS S3 buckets, Azure Blob storage, GCP storage |
 | **URL Vulnerability** | Path-based vulnerabilities | LFI/path traversal, directory enumeration, backup file discovery, config exposure |
-
-### Interfaces
-- **CLI** - Full-featured command-line interface with colored output and progress bars
-- **Web UI** - Flask-based web interface with real-time WebSocket updates
 
 ## Installation
 
@@ -46,7 +42,7 @@ go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
 nuclei -update-templates
 ```
 
-## CLI Usage
+## Usage
 
 ### Basic Scan
 ```bash
@@ -96,39 +92,6 @@ python bughunter.py example.com \
     --tags cve,rce,sqli \        # Nuclei template tags
     --verbose
 ```
-
-## Web Interface
-
-Start the web server:
-```bash
-python bughunter_web.py
-```
-
-Access the interface at `http://127.0.0.1:5001`
-
-### API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/scan` | POST | Start a new scan |
-| `/api/scan/<job_id>` | GET | Get scan status |
-| `/api/scan/<job_id>/findings` | GET | Get Nuclei findings |
-| `/api/scan/<job_id>/advanced` | GET | Get advanced findings |
-| `/api/scan/<job_id>/logic` | GET | Get logic findings |
-| `/api/scan/<job_id>/cloud` | GET | Get cloud findings |
-| `/api/scan/<job_id>/url-vuln` | GET | Get URL vulnerability findings |
-| `/api/scan/<job_id>/export?format=json` | GET | Export report |
-| `/api/status` | GET | System status |
-
-### WebSocket Events (namespace: `/scan`)
-- `subdomain_found` - New subdomain discovered
-- `finding` - New Nuclei finding
-- `advanced_finding` - New advanced check finding
-- `logic_finding` - New logic vulnerability finding
-- `cloud_finding` - New cloud security finding
-- `url_vuln_finding` - New URL vulnerability finding
-- `scan_progress` - Overall progress update
-- `scan_complete` - Scan finished
 
 ## Module Details
 
@@ -210,7 +173,6 @@ python bughunter.py example.com \
 ```
 Bughunting-tool/
 ├── bughunter.py           # Main CLI tool
-├── bughunter_web.py       # Web interface
 ├── subdomain_enum.py      # Subdomain enumeration
 ├── full_nuclei_scanner.py # Nuclei integration
 ├── advanced_checks.py     # Advanced vulnerability checks
@@ -220,18 +182,14 @@ Bughunting-tool/
 ├── scan_prioritizer.py    # Smart target prioritization
 ├── async_scanner.py       # Async HTTP client
 ├── auth_scanner.py        # Authenticated scanning
-├── templates/             # HTML templates
 └── requirements.txt       # Python dependencies
 ```
 
 ## Requirements
 
 ```
-flask>=2.0.0
-flask-socketio>=5.0.0
 requests>=2.25.0
 aiohttp>=3.8.0
-python-socketio>=5.0.0
 ```
 
 ## Disclaimer

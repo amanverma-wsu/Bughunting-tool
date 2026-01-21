@@ -952,11 +952,13 @@ Examples:
         ]
         print(f"  Checks: {', '.join(checks_to_run)}")
 
-        # Build targets for advanced checks
-        adv_targets = [f"https://{args.domain}", f"http://{args.domain}"]
+        # Build targets for advanced checks (prefer HTTPS only to avoid duplicates)
+        adv_targets = [f"https://{args.domain}"]
         for sub in report.interesting_subdomains[:10]:
             if sub.url:
-                adv_targets.append(sub.url)
+                # Normalize to HTTPS
+                url = sub.url.replace("http://", "https://") if sub.url.startswith("http://") else sub.url
+                adv_targets.append(url)
 
         adv_targets = list(set(adv_targets))
         print(f"  Targets: {len(adv_targets)}")
@@ -1004,15 +1006,17 @@ Examples:
     if run_logic or run_cloud:
         print_section("Running Logic & Cloud Checks (Parallel)", "🚀")
 
-        # Build targets
-        logic_targets = [f"https://{args.domain}", f"http://{args.domain}"]
-        cloud_targets = [f"https://{args.domain}", f"http://{args.domain}"]
+        # Build targets (prefer HTTPS only to avoid duplicate findings)
+        logic_targets = [f"https://{args.domain}"]
+        cloud_targets = [f"https://{args.domain}"]
 
         for sub in report.interesting_subdomains[:10]:
             if sub.url:
-                cloud_targets.append(sub.url)
+                # Normalize to HTTPS
+                url = sub.url.replace("http://", "https://") if sub.url.startswith("http://") else sub.url
+                cloud_targets.append(url)
                 if len(logic_targets) < 7:  # Limit logic targets
-                    logic_targets.append(sub.url)
+                    logic_targets.append(url)
 
         logic_targets = list(set(logic_targets))
         cloud_targets = list(set(cloud_targets))
@@ -1158,11 +1162,13 @@ Examples:
         enabled_checks = [c for c in url_checks if c in ["lfi", "dirs", "backups", "configs"]]
         print(f"  Checks: {', '.join(enabled_checks)}")
 
-        # Build targets for URL vuln checks
-        url_vuln_targets = [f"https://{args.domain}", f"http://{args.domain}"]
+        # Build targets for URL vuln checks (HTTPS only to avoid duplicates)
+        url_vuln_targets = [f"https://{args.domain}"]
         for sub in report.interesting_subdomains[:10]:
             if sub.url:
-                url_vuln_targets.append(sub.url)
+                # Normalize to HTTPS
+                url = sub.url.replace("http://", "https://") if sub.url.startswith("http://") else sub.url
+                url_vuln_targets.append(url)
         url_vuln_targets = list(set(url_vuln_targets))
         print(f"  Targets: {len(url_vuln_targets)}")
         print()

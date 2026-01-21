@@ -46,29 +46,33 @@ class AdvancedFinding:
 
 
 # Patterns for detecting secrets in JavaScript
+# Only patterns with specific prefixes/formats to avoid false positives
 JS_SECRET_PATTERNS = {
     "aws_access_key": (r'AKIA[0-9A-Z]{16}', "critical", "AWS Access Key ID"),
-    "aws_secret_key": (r'[A-Za-z0-9/+=]{40}', "critical", "Potential AWS Secret Key"),
+    # AWS secret keys must be near an AWS access key or have context
     "github_token": (r'ghp_[A-Za-z0-9]{36}', "critical", "GitHub Personal Access Token"),
     "github_oauth": (r'gho_[A-Za-z0-9]{36}', "high", "GitHub OAuth Token"),
+    "github_app": (r'ghu_[A-Za-z0-9]{36}', "high", "GitHub App Token"),
+    "github_refresh": (r'ghr_[A-Za-z0-9]{36}', "high", "GitHub Refresh Token"),
     "slack_token": (r'xox[baprs]-[0-9a-zA-Z]{10,48}', "high", "Slack Token"),
-    "slack_webhook": (r'https://hooks\.slack\.com/services/[A-Za-z0-9+/]+', "medium", "Slack Webhook URL"),
+    "slack_webhook": (r'https://hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]+', "medium", "Slack Webhook URL"),
     "google_api_key": (r'AIza[0-9A-Za-z_-]{35}', "high", "Google API Key"),
     "firebase_key": (r'AAAA[A-Za-z0-9_-]{7}:[A-Za-z0-9_-]{140}', "high", "Firebase Cloud Messaging Key"),
-    "stripe_live_key": (r'sk_live_[0-9a-zA-Z]{24}', "critical", "Stripe Live Secret Key"),
-    "stripe_test_key": (r'sk_test_[0-9a-zA-Z]{24}', "low", "Stripe Test Secret Key"),
-    "twilio_sid": (r'AC[a-zA-Z0-9]{32}', "high", "Twilio Account SID"),
-    "twilio_auth": (r'SK[a-zA-Z0-9]{32}', "high", "Twilio Auth Token"),
+    "stripe_live_key": (r'sk_live_[0-9a-zA-Z]{24,}', "critical", "Stripe Live Secret Key"),
+    "stripe_publishable": (r'pk_live_[0-9a-zA-Z]{24,}', "medium", "Stripe Publishable Key"),
+    "stripe_test_key": (r'sk_test_[0-9a-zA-Z]{24,}', "low", "Stripe Test Secret Key"),
+    "twilio_sid": (r'AC[a-f0-9]{32}', "high", "Twilio Account SID"),
+    "twilio_api_key": (r'SK[a-f0-9]{32}', "high", "Twilio API Key"),
     "mailgun_key": (r'key-[0-9a-zA-Z]{32}', "high", "Mailgun API Key"),
-    "jwt_token": (r'eyJ[A-Za-z0-9-_=]+\.eyJ[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*', "medium", "JWT Token"),
+    "sendgrid_key": (r'SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}', "high", "SendGrid API Key"),
     "private_key": (r'-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----', "critical", "Private Key"),
-    "basic_auth": (r'[Bb]asic [A-Za-z0-9+/=]{20,}', "high", "Basic Auth Credentials"),
-    "bearer_token": (r'[Bb]earer [A-Za-z0-9_-]{20,}', "medium", "Bearer Token"),
-    "api_key_generic": (r'["\']?api[_-]?key["\']?\s*[:=]\s*["\']?[A-Za-z0-9_-]{20,}["\']?', "medium", "Generic API Key"),
-    "password_in_url": (r'[?&](password|passwd|pwd|pass)=[^&\s]+', "high", "Password in URL"),
-    "internal_ip": (r'\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})\b', "low", "Internal IP Address"),
-    "s3_bucket": (r'[a-z0-9.-]+\.s3\.amazonaws\.com|s3://[a-z0-9.-]+', "medium", "S3 Bucket Reference"),
-    "azure_storage": (r'[a-z0-9]+\.blob\.core\.windows\.net', "medium", "Azure Storage Reference"),
+    "password_assignment": (r'["\']?password["\']?\s*[:=]\s*["\'][^"\']{8,}["\']', "high", "Hardcoded Password"),
+    "password_in_url": (r'[?&](password|passwd|pwd|pass)=[^&\s]{4,}', "high", "Password in URL"),
+    "heroku_api_key": (r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', "medium", "Potential Heroku API Key"),
+    "npm_token": (r'npm_[A-Za-z0-9]{36}', "high", "NPM Access Token"),
+    "pypi_token": (r'pypi-AgEIcHlwaS5vcmc[A-Za-z0-9_-]{50,}', "high", "PyPI API Token"),
+    "discord_token": (r'[MN][A-Za-z\d]{23,}\.[\w-]{6}\.[\w-]{27}', "high", "Discord Bot Token"),
+    "discord_webhook": (r'https://discord(?:app)?\.com/api/webhooks/\d+/[A-Za-z0-9_-]+', "medium", "Discord Webhook URL"),
 }
 
 # Hidden parameter wordlist for discovery
@@ -301,36 +305,59 @@ class AdvancedScanner:
 
             try:
                 resp = self.session.get(test_url, timeout=self.timeout, verify=False)
+                content_type = resp.headers.get("Content-Type", "")
 
-                # Check for API responses
-                if resp.status_code in [200, 301, 302, 401, 403]:
-                    content_type = resp.headers.get("Content-Type", "")
+                # Skip 403/401 - these just mean the endpoint is protected (good security)
+                # Skip 404 - endpoint doesn't exist
+                # Skip 301/302 - just redirects
+                if resp.status_code not in [200]:
+                    continue
 
-                    # Check for JSON/API responses
-                    is_api = (
-                        "application/json" in content_type
-                        or "swagger" in resp.text.lower()
-                        or "openapi" in resp.text.lower()
-                        or '"paths"' in resp.text
-                        or '"endpoints"' in resp.text
-                    )
+                # Check for actual API documentation content
+                is_swagger = (
+                    "swagger" in resp.text.lower()
+                    or "openapi" in resp.text.lower()
+                    or '"paths":' in resp.text
+                    or '"swagger":' in resp.text
+                )
 
-                    if is_api or resp.status_code in [401, 403]:
-                        severity = "high" if "swagger" in path.lower() or "graphql" in path.lower() else "medium"
-                        discovered_apis.append((path, resp.status_code, severity))
+                is_graphql = (
+                    "graphql" in path.lower()
+                    and ("__schema" in resp.text or "graphiql" in resp.text.lower())
+                )
+
+                is_actuator = (
+                    "actuator" in path
+                    and "application/json" in content_type
+                    and len(resp.text) > 10  # Has actual content
+                )
+
+                is_api_json = (
+                    "application/json" in content_type
+                    and ('"endpoints"' in resp.text or '"routes"' in resp.text or '"api"' in resp.text)
+                )
+
+                if is_swagger:
+                    discovered_apis.append((path, resp.status_code, "high", "Swagger/OpenAPI Documentation Exposed"))
+                elif is_graphql:
+                    discovered_apis.append((path, resp.status_code, "high", "GraphQL Endpoint Exposed"))
+                elif is_actuator:
+                    discovered_apis.append((path, resp.status_code, "medium", "Spring Actuator Endpoint Exposed"))
+                elif is_api_json:
+                    discovered_apis.append((path, resp.status_code, "low", "API Endpoint Responds with JSON"))
 
             except Exception:
                 continue
 
-        for path, status, severity in discovered_apis:
+        for path, status, severity, title in discovered_apis:
             finding = AdvancedFinding(
                 check_type="api_discovery",
                 severity=severity,
                 target=base_url + path,
-                title=f"API Endpoint Discovered: {path}",
-                description=f"Found API endpoint at {path} (HTTP {status})",
-                evidence=f"Status Code: {status}",
-                remediation="Ensure API endpoints are properly authenticated and documented access is restricted",
+                title=title,
+                description=f"Found accessible API endpoint at {path} returning content (HTTP {status})",
+                evidence=f"Status Code: {status}, Content accessible",
+                remediation="Ensure API documentation is not publicly accessible in production",
                 references=["https://owasp.org/www-project-api-security/"],
             )
             findings.append(finding)

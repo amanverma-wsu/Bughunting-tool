@@ -816,6 +816,7 @@ class LogicVulnerabilityScanner:
         targets: List[str],
         checks: Optional[List[str]] = None,
         concurrency: int = 5,
+        jwt_token: Optional[str] = None,
     ) -> Dict[str, List[LogicFinding]]:
         """
         Scan multiple targets concurrently.
@@ -824,6 +825,7 @@ class LogicVulnerabilityScanner:
             targets: List of target URLs
             checks: Specific checks to run
             concurrency: Max concurrent target scans
+            jwt_token: Optional existing JWT token to analyze
 
         Returns:
             Dict mapping target URL to findings list
@@ -833,7 +835,7 @@ class LogicVulnerabilityScanner:
 
         async def scan_target(target: str) -> Tuple[str, List[LogicFinding]]:
             async with semaphore:
-                findings = await self.scan(target, checks)
+                findings = await self.scan(target, checks, jwt_token=jwt_token)
                 return target, findings
 
         tasks = [scan_target(t) for t in targets]
