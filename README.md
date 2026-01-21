@@ -1,303 +1,252 @@
-# BugHunter - Advanced Vulnerability Scanner
+# BugHunter
 
-A comprehensive vulnerability scanning platform that combines domain enumeration and Nuclei-based vulnerability detection with a modern web interface for real-time scanning and result visualization.
+A comprehensive vulnerability scanning toolkit for security researchers and penetration testers. BugHunter combines subdomain enumeration, Nuclei template scanning, and custom vulnerability checks into a single powerful tool.
 
 ## Features
 
-### Core Capabilities
-- **Multi-source Subdomain Enumeration**: Leverages multiple sources (DNS, certificate transparency, web archives) to discover subdomains
-- **Comprehensive Vulnerability Scanning**: Integrates Nuclei with 5,600+ templates for detecting CVEs, misconfigurations, and security issues
-- **Real-time Progress Tracking**: WebSocket-based live updates showing scan progress, found vulnerabilities, and statistics
-- **Multiple Export Formats**: Generate reports in HTML, JSON, and CSV formats
-- **Severity-based Filtering**: Focus on specific vulnerability severity levels (critical, high, medium, low, info)
-- **Template Customization**: Filter scans by tags, exclude specific templates, and customize template selection
-- **Rate Limiting & Concurrency Control**: Fine-tune scanning performance and resource usage
-- **Proxy Support**: Route scans through HTTP/HTTPS proxies for testing behind firewalls
+### Core Scanning
+- **Subdomain Enumeration** - Discover subdomains using multiple sources (crt.sh, SecurityTrails, etc.)
+- **Nuclei Integration** - Full Nuclei scanner integration with progress tracking and real-time results
+- **Smart Target Prioritization** - Classify and prioritize targets based on technology stack and vulnerability likelihood
 
-### Web Interface
-- Modern dark-themed dashboard with real-time updates
-- Live progress bar showing scan phases and completion percentage
-- Interactive findings explorer with severity-based filtering
-- Real-time subdomain discovery viewer
-- Comprehensive statistics dashboard
-- One-click report export functionality
+### Vulnerability Checks
 
-## Quick Start
+| Module | Description | Checks |
+|--------|-------------|--------|
+| **Advanced Checks** | Web application vulnerabilities | JS secrets, CORS misconfig, API discovery, cache poisoning, host header injection |
+| **Logic Checks** | Business logic vulnerabilities | JWT algorithm confusion, OAuth redirect bypass, password reset poisoning |
+| **Cloud Checks** | Cloud security misconfigurations | AWS S3 buckets, Azure Blob storage, GCP storage |
+| **URL Vulnerability** | Path-based vulnerabilities | LFI/path traversal, directory enumeration, backup file discovery, config exposure |
 
-### Prerequisites
+### Interfaces
+- **CLI** - Full-featured command-line interface with colored output and progress bars
+- **Web UI** - Flask-based web interface with real-time WebSocket updates
 
-- **Python 3.8+**
-- **Nuclei**: Vulnerability template engine ([installation guide](https://github.com/projectdiscovery/nuclei/wiki/Installation))
-- **Subfinder**: Subdomain enumeration tool ([installation guide](https://github.com/projectdiscovery/subfinder/wiki/Installation))
+## Installation
 
-### Installation
+### Requirements
+- Python 3.8+
+- [Nuclei](https://github.com/projectdiscovery/nuclei) (recommended)
+- [Subfinder](https://github.com/projectdiscovery/subfinder) (optional)
 
-1. Clone the repository:
+### Setup
+
 ```bash
+# Clone the repository
 git clone https://github.com/amanverma-wsu/Bughunting-tool.git
-cd CVE-2024-41713-Scan
-```
+cd Bughunting-tool
 
-2. Create and activate a virtual environment:
-```bash
-python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-```
-
-3. Install Python dependencies:
-```bash
+# Install Python dependencies
 pip install -r requirements.txt
+
+# Install Nuclei (required for vulnerability scanning)
+go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+
+# Update Nuclei templates
+nuclei -update-templates
 ```
 
-### Running BugHunter
+## CLI Usage
 
-#### Web Interface (Recommended)
+### Basic Scan
 ```bash
-python3 bughunter_web.py
+python bughunter.py example.com
 ```
-Then navigate to `http://127.0.0.1:5001` in your browser.
 
-#### Command Line
+### Full Scan with All Features
 ```bash
-python3 bughunter.py -d example.com -o report.html --json results.json -v
+python bughunter.py example.com \
+    --severity critical,high,medium \
+    --smart-priority \
+    -o report.html \
+    --json report.json
 ```
 
-## Usage Guide
-
-### Command Line Interface
-
+### Skip Specific Checks
 ```bash
-python3 bughunter.py [OPTIONS]
-
-Options:
-  -d, --domain TEXT              Target domain to scan (required)
-  -o, --output TEXT              Output HTML report file
-  --json TEXT                    Output JSON results file
-  -s, --severity TEXT            Filter by severity (critical,high,medium,low,info)
-  -t, --tags TEXT                Include specific Nuclei tags
-  -e, --exclude-tags TEXT        Exclude specific Nuclei tags
-  -r, --rate-limit INTEGER       Rate limit (requests/sec, default: 150)
-  -c, --concurrency INTEGER      Concurrency level (default: 25)
-  --timeout INTEGER              Request timeout in seconds (default: 10)
-  --proxy TEXT                   HTTP proxy URL (e.g., http://127.0.0.1:8080)
-  --no-enum                      Skip subdomain enumeration
-  --no-resolve                   Skip DNS resolution
-  --no-alive-check               Skip alive host checking
-  -v, --verbose                  Enable verbose output
-  --help                         Show help message
+python bughunter.py example.com \
+    --skip-enum \          # Skip subdomain enumeration
+    --skip-nuclei \        # Skip Nuclei scan
+    --skip-advanced \      # Skip advanced checks
+    --skip-logic \         # Skip logic checks
+    --skip-cloud \         # Skip cloud checks
+    --skip-url-vuln        # Skip URL vulnerability checks
 ```
 
-### Web Interface
+### Selective Checks
+```bash
+# Only run specific logic checks
+python bughunter.py example.com --logic-checks jwt oauth
 
-1. **Enter Domain**: Input the target domain in the scan form
-2. **Configure Options**: 
-   - Select severity levels to include
-   - Specify tags to include/exclude
-   - Adjust rate limiting and concurrency
-   - Enable/disable enumeration phases
-3. **Start Scan**: Click "Start Scan" to begin
-4. **Monitor Progress**: Watch real-time updates of:
-   - Subdomains discovered
-   - Vulnerabilities found
-   - Overall scan progress
-5. **Export Results**: Download findings in your preferred format
+# Only check specific cloud providers
+python bughunter.py example.com --cloud-providers s3 azure
 
-## Project Structure
-
-```
-CVE-2024-41713-Scan/
-├── bughunter.py                 # CLI entry point
-├── bughunter_web.py             # Web server with Flask & SocketIO
-├── full_nuclei_scanner.py       # Nuclei integration module
-├── subdomain_enum.py            # Subdomain enumeration module
-├── html_report_generator.py     # HTML report generation
-├── templates/
-│   └── bughunter.html          # Web interface UI
-├── requirements.txt             # Python dependencies
-└── README.md                    # This file
+# Only run specific URL vulnerability checks
+python bughunter.py example.com --url-checks lfi dirs backups
 ```
 
-## Architecture
+### Advanced Options
+```bash
+python bughunter.py example.com \
+    --rate-limit 100 \           # Requests per second
+    --concurrency 50 \           # Concurrent connections
+    --timeout 15 \               # Request timeout
+    --proxy http://127.0.0.1:8080 \
+    --headers "Authorization: Bearer token" \
+    --tags cve,rce,sqli \        # Nuclei template tags
+    --verbose
+```
 
-### Scanning Pipeline
+## Web Interface
 
-1. **Subdomain Enumeration** (Phase 1)
-   - Multiple sources: DNS queries, certificate transparency, web archives
-   - Parallel processing with configurable thread count
-   - Optional DNS resolution and alive host checking
-   - Severity classification of subdomains
+Start the web server:
+```bash
+python bughunter_web.py
+```
 
-2. **Target Consolidation** (Phase 2)
-   - Collects URLs from enumeration results
-   - Removes duplicates and filters by interest level
-   - Prepares list for vulnerability scanning
+Access the interface at `http://127.0.0.1:5001`
 
-3. **Vulnerability Scanning** (Phase 3)
-   - Launches Nuclei with selected templates
-   - Real-time progress updates via WebSocket
-   - Severity-based filtering and categorization
-   - Finding deduplication and enrichment
+### API Endpoints
 
-4. **Report Generation** (Phase 4)
-   - Aggregates all findings and statistics
-   - Generates multiple report formats
-   - Exports statistics and metadata
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/scan` | POST | Start a new scan |
+| `/api/scan/<job_id>` | GET | Get scan status |
+| `/api/scan/<job_id>/findings` | GET | Get Nuclei findings |
+| `/api/scan/<job_id>/advanced` | GET | Get advanced findings |
+| `/api/scan/<job_id>/logic` | GET | Get logic findings |
+| `/api/scan/<job_id>/cloud` | GET | Get cloud findings |
+| `/api/scan/<job_id>/url-vuln` | GET | Get URL vulnerability findings |
+| `/api/scan/<job_id>/export?format=json` | GET | Export report |
+| `/api/status` | GET | System status |
 
-### Real-time Updates
+### WebSocket Events (namespace: `/scan`)
+- `subdomain_found` - New subdomain discovered
+- `finding` - New Nuclei finding
+- `advanced_finding` - New advanced check finding
+- `logic_finding` - New logic vulnerability finding
+- `cloud_finding` - New cloud security finding
+- `url_vuln_finding` - New URL vulnerability finding
+- `scan_progress` - Overall progress update
+- `scan_complete` - Scan finished
 
-- **WebSocket Communication**: `/scan` namespace for live events
-- **Events**:
-  - `scan_status`: Overall scan progress and phase
-  - `subdomain_found`: Discovered subdomain
-  - `finding`: Vulnerability finding
-  - `progress`: Nuclei scanning progress
-  - `scan_complete`: Scan completion with final stats
+## Module Details
+
+### Logic Checks
+| Check | Description |
+|-------|-------------|
+| `jwt` | JWT algorithm confusion (none, HS256/RS256 switch), weak secrets |
+| `oauth` | OAuth redirect_uri bypass, open redirect in auth flows |
+| `password_reset` | Host header injection in password reset emails |
+
+### Cloud Checks
+| Provider | Checks |
+|----------|--------|
+| AWS S3 | Bucket enumeration, public access, takeover detection |
+| Azure | Blob storage exposure, container misconfiguration |
+| GCP | Storage bucket access, public data exposure |
+
+### URL Vulnerability Checks
+| Check | Description |
+|-------|-------------|
+| `lfi` | Path traversal with 20+ payloads (Linux/Windows), filter bypass |
+| `dirs` | 80+ common directories (admin panels, APIs, debug endpoints) |
+| `backups` | Backup files (.bak, .sql, .zip), database dumps |
+| `configs` | Config exposure (.env, .git, web.config, etc.) |
+
+### Advanced Checks
+| Check | Description |
+|-------|-------------|
+| `js_secrets` | API keys, tokens, credentials in JavaScript files |
+| `cors` | CORS misconfiguration allowing credential theft |
+| `api_discovery` | Swagger, GraphQL, internal API endpoints |
+| `cache_poison` | Web cache poisoning via unkeyed headers |
+| `host_header` | Host header injection vulnerabilities |
+| `hidden_params` | Debug/admin parameters discovery |
+| `method_override` | HTTP method override bypass |
 
 ## Output Formats
 
 ### HTML Report
-Beautiful, interactive HTML report with:
-- Findings table with severity-based color coding
-- Summary statistics (total findings, breakdown by severity)
-- Subdomain discovery details
-- Responsive design for mobile viewing
+```bash
+python bughunter.py example.com -o report.html
+```
 
 ### JSON Report
-Structured JSON with:
-- Raw findings with complete metadata
-- Statistics and timing information
-- Scan configuration used
-- Timeline data
+```bash
+python bughunter.py example.com --json report.json
+```
 
-### CSV Report
-Tabular format with:
-- Type (subdomain/finding)
-- Severity level
-- Template/Subdomain identifier
-- Target URL
-- Description/Details
-
-## Use Cases
-
-- **Red Team Testing**: Comprehensive vulnerability assessment of target domains
-- **Bug Bounty Hunting**: Automated discovery of CVEs and misconfigurations
-- **Security Audits**: Large-scale infrastructure scanning with detailed reporting
-- **Compliance Testing**: Document vulnerability discovery and remediation efforts
-- **Threat Hunting**: Identify exposed services and common misconfigurations
+### CSV Export
+```bash
+python bughunter.py example.com --csv findings.csv
+```
 
 ## Configuration
 
-### Environment Variables
+### Authentication
 ```bash
-# Set proxy for scanning
-export HTTP_PROXY=http://127.0.0.1:8080
+# Bearer token
+python bughunter.py example.com --bearer-token "your-token"
 
-# Enable verbose output
-export BUGHUNTER_VERBOSE=1
+# API key
+python bughunter.py example.com --api-key "key" --api-key-header "X-API-Key"
+
+# Config file
+python bughunter.py example.com --auth-config auth.json
 ```
 
-### Performance Tuning
-
-| Parameter | Default | Impact |
-|-----------|---------|--------|
-| `--concurrency` | 25 | Higher = more parallel scans, more resource usage |
-| `--rate-limit` | 150 | Requests per second, higher = more network bandwidth |
-| `--timeout` | 10s | Response timeout, higher = slower but more tolerant |
-
-**Recommendation**: Start with defaults and adjust based on your network capacity.
-
-## Example Scan Results
-
-```
-Domain: example.com
-Subdomains Found: 287
-Interesting Subdomains: 45
-Total Findings: 12
-
-Findings by Severity:
-  🔴 Critical: 1
-  🟠 High: 3
-  🔵 Medium: 5
-  🟢 Low: 3
-  ⚪ Info: 0
-
-Scan Duration: 4 hours 32 minutes
-Report: report_example.com.html
-```
-
-## Security & Ethics
-
-### Legal Notice
-This tool is designed for:
-- Authorized security testing
-- Red team assessments
-- Bug bounty programs
-- Personal learning and research
-
-**Unauthorized access to computer systems is illegal.** Always obtain proper authorization before scanning.
-
-### Best Practices
-- Always scan only systems you own or have explicit permission to test
-- Respect rate limiting and target resource constraints
-- Document all authorized testing
-- Follow responsible disclosure guidelines for findings
-- Review and comply with all applicable laws and regulations
-
-## 🐛 Troubleshooting
-
-### Nuclei Not Found
+### Smart Prioritization
 ```bash
-# Install Nuclei
-go install -v github.com/projectdiscovery/nuclei/v2/cmd/nuclei@latest
-
-# Verify installation
-nuclei -version
+python bughunter.py example.com \
+    --smart-priority \
+    --max-critical 50 \
+    --max-high 100 \
+    --max-normal 200
 ```
 
-### Subfinder Not Found
-```bash
-# Install Subfinder
-go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+## Project Structure
 
-# Verify installation
-subfinder -version
+```
+Bughunting-tool/
+├── bughunter.py           # Main CLI tool
+├── bughunter_web.py       # Web interface
+├── subdomain_enum.py      # Subdomain enumeration
+├── full_nuclei_scanner.py # Nuclei integration
+├── advanced_checks.py     # Advanced vulnerability checks
+├── logic_checks.py        # Logic vulnerability scanner
+├── cloud_checks.py        # Cloud security checks
+├── url_vuln_scanner.py    # URL vulnerability scanner
+├── scan_prioritizer.py    # Smart target prioritization
+├── async_scanner.py       # Async HTTP client
+├── auth_scanner.py        # Authenticated scanning
+├── templates/             # HTML templates
+└── requirements.txt       # Python dependencies
 ```
 
-### Progress Bar Stuck at 0%
-- Ensure WebSocket connection is established (check browser console)
-- Verify Flask-SocketIO is installed: `pip install flask-socketio`
-- Check firewall isn't blocking WebSocket connections
+## Requirements
 
-### No Findings Detected
-- Verify target is reachable: `curl -I http://target.com`
-- Increase scan duration (some vulnerabilities take longer to detect)
-- Check rate limiting isn't too restrictive
-- Verify Nuclei templates are up to date: `nuclei -update-templates`
+```
+flask>=2.0.0
+flask-socketio>=5.0.0
+requests>=2.25.0
+aiohttp>=3.8.0
+python-socketio>=5.0.0
+```
 
-## Dependencies
+## Disclaimer
 
-- **Flask**: Web framework
-- **Flask-SocketIO**: Real-time WebSocket communication
-- **Nuclei**: Vulnerability scanning engine
-- **Subfinder**: Subdomain enumeration
-- **httpx**: HTTP client for requests
-- **python-dotenv**: Environment variable management
+This tool is intended for **authorized security testing only**.
 
-See [requirements.txt](requirements.txt) for specific versions.
+- Always obtain proper authorization before scanning any systems
+- Testing systems without permission is illegal and unethical
+- The authors are not responsible for any misuse of this tool
+- Use responsibly and ethically
 
-## Author
+## Contributing
 
-**Aman Verma** - [GitHub](https://github.com/amanverma-wsu)
+Contributions are welcome! Please feel free to submit issues or pull requests.
 
-## Acknowledgments
+## License
 
-- [ProjectDiscovery](https://projectdiscovery.io) for Nuclei and Subfinder
-- Community contributors and bug reporters
-- Security researchers who responsibly disclose vulnerabilities
-
-## Support & Contact
-
-For issues, questions, or suggestions:
-- Open an issue on [GitHub Issues](https://github.com/amanverma-wsu/Bughunting-tool/issues)
-- Check existing documentation
-- Review closed issues for solutions
+MIT License - see LICENSE file for details.

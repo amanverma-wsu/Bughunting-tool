@@ -29,9 +29,52 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # Import our modules
 from subdomain_enum import SubdomainEnumerator, SubdomainInfo, check_tools_installed
 from full_nuclei_scanner import (
-    NucleiScanner, NucleiFinding, ScanStatistics,
+    NucleiScanner, NucleiFinding, ScanStatistics, ScanProgress,
     check_nuclei_installed, get_nuclei_version, get_template_count
 )
+from advanced_checks import AdvancedScanner, AdvancedFinding
+
+# Import new async and smart scanning modules
+try:
+    from async_scanner import AsyncScanner, AsyncHTTPClient, RateLimitConfig
+    ASYNC_AVAILABLE = True
+except ImportError:
+    ASYNC_AVAILABLE = False
+
+try:
+    from scan_prioritizer import ScanPrioritizer, ScanOrchestrator, TargetPriority
+    PRIORITIZER_AVAILABLE = True
+except ImportError:
+    PRIORITIZER_AVAILABLE = False
+
+try:
+    from logic_checks import LogicVulnerabilityScanner, LogicFinding
+    LOGIC_CHECKS_AVAILABLE = True
+except ImportError:
+    LOGIC_CHECKS_AVAILABLE = False
+
+try:
+    from auth_scanner import (
+        AuthConfigLoader, AuthSessionManager, AuthenticatedScanner,
+        NucleiAuthIntegration, AuthConfig
+    )
+    AUTH_SCANNER_AVAILABLE = True
+except ImportError:
+    AUTH_SCANNER_AVAILABLE = False
+
+try:
+    from cloud_checks import CloudSecurityScanner, CloudFinding, CloudSeverity
+    CLOUD_CHECKS_AVAILABLE = True
+except ImportError:
+    CLOUD_CHECKS_AVAILABLE = False
+
+try:
+    from url_vuln_scanner import URLVulnScanner, URLVulnFinding, VulnSeverity, VulnType
+    URL_VULN_AVAILABLE = True
+except ImportError:
+    URL_VULN_AVAILABLE = False
+
+import asyncio
 
 # Colors
 class Colors:
@@ -65,8 +108,12 @@ class ScanReport:
     subdomains: List[SubdomainInfo] = field(default_factory=list)
     interesting_subdomains: List[SubdomainInfo] = field(default_factory=list)
     findings: List[NucleiFinding] = field(default_factory=list)
+    advanced_findings: List[AdvancedFinding] = field(default_factory=list)
+    logic_findings: List = field(default_factory=list)  # LogicFinding
+    cloud_findings: List = field(default_factory=list)  # CloudFinding
+    url_vuln_findings: List = field(default_factory=list)  # URLVulnFinding
     statistics: Dict = field(default_factory=dict)
-    
+
     def to_dict(self) -> dict:
         return {
             "domain": self.domain,
@@ -76,6 +123,10 @@ class ScanReport:
             "subdomains": [s.to_dict() for s in self.subdomains],
             "interesting_subdomains": [s.to_dict() for s in self.interesting_subdomains],
             "findings": [f.to_dict() for f in self.findings],
+            "advanced_findings": [f.to_dict() for f in self.advanced_findings],
+            "logic_findings": [f.to_dict() if hasattr(f, 'to_dict') else f for f in self.logic_findings],
+            "cloud_findings": [f.to_dict() if hasattr(f, 'to_dict') else f for f in self.cloud_findings],
+            "url_vuln_findings": [f.to_dict() if hasattr(f, 'to_dict') else f for f in self.url_vuln_findings],
         }
 
 
@@ -122,7 +173,7 @@ def print_subdomain(info: SubdomainInfo):
     """Print subdomain info."""
     status = f"{Colors.GREEN}✓{Colors.RESET}" if info.is_alive else f"{Colors.RED}✗{Colors.RESET}"
     sev_color = SEVERITY_COLORS.get(info.severity, Colors.WHITE)
-    
+
     print(f"  {status} {sev_color}[{info.severity.upper():8}]{Colors.RESET} {info.subdomain}")
     if info.categories:
         cats = ", ".join(info.categories)
@@ -132,6 +183,63 @@ def print_subdomain(info: SubdomainInfo):
     if info.technologies:
         techs = ", ".join(info.technologies[:5])
         print(f"             {Colors.GRAY}Tech:{Colors.RESET} {techs}")
+    print()
+
+
+def print_advanced_finding(finding: AdvancedFinding):
+    """Print an advanced vulnerability finding."""
+    color = SEVERITY_COLORS.get(finding.severity, Colors.WHITE)
+    print(f"  {color}[{finding.severity.upper():8}]{Colors.RESET} "
+          f"{Colors.WHITE}{finding.title}{Colors.RESET}")
+    print(f"             {Colors.GRAY}Type:{Colors.RESET}   {finding.check_type}")
+    print(f"             {Colors.GRAY}Target:{Colors.RESET} {finding.target}")
+    if finding.evidence:
+        evidence = finding.evidence[:80] + "..." if len(finding.evidence) > 80 else finding.evidence
+        print(f"             {Colors.GRAY}Evidence:{Colors.RESET} {evidence}")
+    print()
+
+
+def print_logic_finding(finding):
+    """Print a logic vulnerability finding."""
+    severity = finding.severity.value if hasattr(finding.severity, 'value') else finding.severity
+    color = SEVERITY_COLORS.get(severity, Colors.WHITE)
+    print(f"  {color}[{severity.upper():8}]{Colors.RESET} "
+          f"{Colors.WHITE}{finding.finding_type}{Colors.RESET}")
+    print(f"             {Colors.GRAY}Vuln:{Colors.RESET}   {finding.vulnerability}")
+    print(f"             {Colors.GRAY}Target:{Colors.RESET} {finding.target}")
+    if finding.description:
+        desc = finding.description[:80] + "..." if len(finding.description) > 80 else finding.description
+        print(f"             {Colors.GRAY}Info:{Colors.RESET}   {desc}")
+    print()
+
+
+def print_cloud_finding(finding):
+    """Print a cloud security finding."""
+    severity = finding.severity.value if hasattr(finding.severity, 'value') else finding.severity
+    provider = finding.provider.value if hasattr(finding.provider, 'value') else finding.provider
+    color = SEVERITY_COLORS.get(severity, Colors.WHITE)
+    print(f"  {color}[{severity.upper():8}]{Colors.RESET} "
+          f"{Colors.WHITE}{finding.finding_type}{Colors.RESET}")
+    print(f"             {Colors.GRAY}Provider:{Colors.RESET} {provider}")
+    print(f"             {Colors.GRAY}Resource:{Colors.RESET} {finding.resource}")
+    if finding.description:
+        desc = finding.description[:80] + "..." if len(finding.description) > 80 else finding.description
+        print(f"             {Colors.GRAY}Info:{Colors.RESET}   {desc}")
+    print()
+
+
+def print_url_vuln_finding(finding):
+    """Print a URL vulnerability finding."""
+    severity = finding.severity.value if hasattr(finding.severity, 'value') else finding.severity
+    vuln_type = finding.vuln_type.value if hasattr(finding.vuln_type, 'value') else finding.vuln_type
+    color = SEVERITY_COLORS.get(severity, Colors.WHITE)
+    print(f"  {color}[{severity.upper():8}]{Colors.RESET} "
+          f"{Colors.WHITE}{vuln_type.upper()}{Colors.RESET}")
+    print(f"             {Colors.GRAY}URL:{Colors.RESET}     {finding.url}")
+    print(f"             {Colors.GRAY}Payload:{Colors.RESET} {finding.payload[:60]}...")
+    if finding.description:
+        desc = finding.description[:80] + "..." if len(finding.description) > 80 else finding.description
+        print(f"             {Colors.GRAY}Info:{Colors.RESET}    {desc}")
     print()
 
 
@@ -505,7 +613,64 @@ Examples:
     nuclei_group.add_argument("--concurrency", type=int, default=25, help="Concurrent templates (default: 25)")
     nuclei_group.add_argument("--skip-nuclei", action="store_true", help="Skip Nuclei scanning")
     nuclei_group.add_argument("--update-templates", action="store_true", help="Update Nuclei templates")
-    
+
+    # Advanced checks options
+    adv_group = parser.add_argument_group("Advanced Checks")
+    adv_group.add_argument("--skip-advanced", action="store_true", help="Skip advanced vulnerability checks")
+    adv_group.add_argument("--advanced-checks", nargs="+",
+                           choices=["js_secrets", "hidden_params", "api_discovery", "cors",
+                                    "method_override", "cache_poison", "host_header"],
+                           help="Specific advanced checks to run (default: all)")
+    adv_group.add_argument("--advanced-threads", type=int, default=10, help="Threads for advanced checks (default: 10)")
+
+    # Logic vulnerability checks options
+    logic_group = parser.add_argument_group("Logic Checks")
+    logic_group.add_argument("--skip-logic", action="store_true", help="Skip logic vulnerability checks")
+    logic_group.add_argument("--logic-checks", nargs="+",
+                             choices=["password_reset", "jwt", "oauth"],
+                             help="Specific logic checks to run (default: all)")
+    logic_group.add_argument("--jwt-token", help="JWT token for JWT vulnerability testing")
+
+    # Cloud security checks options
+    cloud_group = parser.add_argument_group("Cloud Checks")
+    cloud_group.add_argument("--skip-cloud", action="store_true", help="Skip cloud security checks")
+    cloud_group.add_argument("--cloud-providers", nargs="+",
+                             choices=["s3", "azure", "gcp"],
+                             default=["s3", "azure", "gcp"],
+                             help="Cloud providers to check (default: all)")
+
+    # URL vulnerability checks options (LFI, directory enum, etc.)
+    url_vuln_group = parser.add_argument_group("URL Vulnerability Checks")
+    url_vuln_group.add_argument("--skip-url-vuln", action="store_true",
+                                help="Skip URL vulnerability checks (LFI, directory enum)")
+    url_vuln_group.add_argument("--url-checks", nargs="+",
+                                choices=["lfi", "dirs", "backups", "configs"],
+                                default=["lfi", "dirs", "backups", "configs"],
+                                help="URL vulnerability checks to run (default: all)")
+    url_vuln_group.add_argument("--url-vuln-threads", type=int, default=5,
+                                help="Concurrent URL vulnerability checks (default: 5)")
+
+    # Authentication options
+    auth_group = parser.add_argument_group("Authentication")
+    auth_group.add_argument("--auth-config", help="Path to auth config file (JSON)")
+    auth_group.add_argument("--auth-env-prefix", default="BUGHUNTER",
+                            help="Environment variable prefix for auth (default: BUGHUNTER)")
+    auth_group.add_argument("--bearer-token", help="Bearer token for authenticated scanning")
+    auth_group.add_argument("--api-key", help="API key for authenticated scanning")
+    auth_group.add_argument("--api-key-header", default="X-API-Key",
+                            help="Header name for API key (default: X-API-Key)")
+
+    # Prioritization options
+    priority_group = parser.add_argument_group("Scan Prioritization")
+    priority_group.add_argument("--smart-priority", action="store_true",
+                                help="Enable smart target prioritization")
+    priority_group.add_argument("--max-critical", type=int, default=50,
+                                help="Max critical priority targets (default: 50)")
+    priority_group.add_argument("--max-high", type=int, default=100,
+                                help="Max high priority targets (default: 100)")
+    priority_group.add_argument("--max-normal", type=int, default=200,
+                                help="Max normal priority targets (default: 200)")
+
     # Output options
     output_group = parser.add_argument_group("Output Options")
     output_group.add_argument("-o", "--output", help="Output HTML report file")
@@ -543,7 +708,39 @@ Examples:
         print(f"  {Colors.GREEN}✓{Colors.RESET} Subfinder: Available")
     else:
         print(f"  {Colors.GRAY}○{Colors.RESET} Subfinder: Not installed (optional)")
-    
+
+    # Check new modules
+    print()
+    if ASYNC_AVAILABLE:
+        print(f"  {Colors.GREEN}✓{Colors.RESET} Async Scanner: Available")
+    else:
+        print(f"  {Colors.GRAY}○{Colors.RESET} Async Scanner: Not loaded")
+
+    if PRIORITIZER_AVAILABLE:
+        print(f"  {Colors.GREEN}✓{Colors.RESET} Smart Prioritizer: Available")
+    else:
+        print(f"  {Colors.GRAY}○{Colors.RESET} Smart Prioritizer: Not loaded")
+
+    if LOGIC_CHECKS_AVAILABLE:
+        print(f"  {Colors.GREEN}✓{Colors.RESET} Logic Checks: Available (JWT, OAuth, Password Reset)")
+    else:
+        print(f"  {Colors.GRAY}○{Colors.RESET} Logic Checks: Not loaded")
+
+    if CLOUD_CHECKS_AVAILABLE:
+        print(f"  {Colors.GREEN}✓{Colors.RESET} Cloud Checks: Available (S3, Azure, GCP)")
+    else:
+        print(f"  {Colors.GRAY}○{Colors.RESET} Cloud Checks: Not loaded")
+
+    if AUTH_SCANNER_AVAILABLE:
+        print(f"  {Colors.GREEN}✓{Colors.RESET} Auth Scanner: Available")
+    else:
+        print(f"  {Colors.GRAY}○{Colors.RESET} Auth Scanner: Not loaded")
+
+    if URL_VULN_AVAILABLE:
+        print(f"  {Colors.GREEN}✓{Colors.RESET} URL Vuln Scanner: Available (LFI, Dir Enum, Backup)")
+    else:
+        print(f"  {Colors.GRAY}○{Colors.RESET} URL Vuln Scanner: Not loaded")
+
     # Update templates if requested
     if args.update_templates and nuclei_ok:
         print_section("Updating Templates", "📥")
@@ -613,9 +810,51 @@ Examples:
     # Add main domain
     all_targets.add(f"http://{args.domain}")
     all_targets.add(f"https://{args.domain}")
-    
+
     print(f"\n  {Colors.CYAN}Total targets for scanning:{Colors.RESET} {len(all_targets)}")
-    
+
+    # Smart target prioritization
+    if args.smart_priority and PRIORITIZER_AVAILABLE and all_targets:
+        print_section("Smart Target Prioritization", "🎯")
+
+        prioritizer = ScanPrioritizer()
+        scan_plan = prioritizer.get_scan_plan(
+            urls=list(all_targets),
+            max_critical=args.max_critical,
+            max_high=args.max_high,
+            max_normal=args.max_normal,
+        )
+
+        # Show prioritization results
+        priority_names = {
+            TargetPriority.CRITICAL: ("Critical", Colors.RED),
+            TargetPriority.HIGH: ("High", Colors.YELLOW),
+            TargetPriority.NORMAL: ("Normal", Colors.BLUE),
+            TargetPriority.LOW: ("Low", Colors.GREEN),
+            TargetPriority.SKIP: ("Skip", Colors.GRAY),
+        }
+
+        for priority, (name, color) in priority_names.items():
+            targets = scan_plan.get(priority, [])
+            print(f"  {color}{name}:{Colors.RESET} {len(targets)} targets")
+
+        # Replace all_targets with prioritized targets (excluding SKIP)
+        prioritized_targets = set()
+        for priority in [TargetPriority.CRITICAL, TargetPriority.HIGH,
+                         TargetPriority.NORMAL, TargetPriority.LOW]:
+            for classified in scan_plan.get(priority, []):
+                prioritized_targets.add(classified.url)
+
+        print(f"\n  {Colors.CYAN}Prioritized targets:{Colors.RESET} {len(prioritized_targets)}")
+        skipped = len(all_targets) - len(prioritized_targets)
+        if skipped > 0:
+            print(f"  {Colors.GRAY}Skipped:{Colors.RESET} {skipped} low-value targets")
+
+        all_targets = prioritized_targets
+
+    elif args.smart_priority and not PRIORITIZER_AVAILABLE:
+        print(f"\n  {Colors.YELLOW}Smart prioritization not available (module not loaded){Colors.RESET}")
+
     # Nuclei scanning
     if not args.skip_nuclei and nuclei_ok and all_targets:
         print_section("Running Nuclei Vulnerability Scan", "🔥")
@@ -675,7 +914,289 @@ Examples:
             "findings": severity_counts,
             "total_findings": len(findings),
         }
-    
+
+    # Advanced vulnerability checks
+    if not args.skip_advanced:
+        print_section("Running Advanced Vulnerability Checks", "🔬")
+
+        # Determine which checks to run
+        checks_to_run = args.advanced_checks or [
+            "js_secrets", "cors", "api_discovery", "cache_poison", "host_header"
+        ]
+        print(f"  Checks: {', '.join(checks_to_run)}")
+
+        # Build targets for advanced checks
+        adv_targets = [f"https://{args.domain}", f"http://{args.domain}"]
+        for sub in report.interesting_subdomains[:10]:
+            if sub.url:
+                adv_targets.append(sub.url)
+
+        adv_targets = list(set(adv_targets))
+        print(f"  Targets: {len(adv_targets)}")
+        print()
+
+        def on_adv_finding(finding: AdvancedFinding):
+            print_advanced_finding(finding)
+            report.advanced_findings.append(finding)
+
+        def on_adv_progress(check_name: str, current: int, total: int):
+            if args.verbose:
+                print(f"  {Colors.GRAY}[{check_name}] {current}/{total}{Colors.RESET}")
+
+        adv_scanner = AdvancedScanner(
+            timeout=args.timeout,
+            threads=args.advanced_threads,
+            proxy=args.proxy,
+            callback=on_adv_finding,
+            progress_callback=on_adv_progress if args.verbose else None,
+        )
+
+        adv_scanner.scan(adv_targets, checks_to_run)
+
+        # Advanced findings summary
+        adv_severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+        for f in report.advanced_findings:
+            if f.severity in adv_severity_counts:
+                adv_severity_counts[f.severity] += 1
+
+        print_section("Advanced Checks Summary", "📊")
+        print(f"  {Colors.RED}Critical:{Colors.RESET} {adv_severity_counts['critical']}")
+        print(f"  {Colors.YELLOW}High:{Colors.RESET}     {adv_severity_counts['high']}")
+        print(f"  {Colors.BLUE}Medium:{Colors.RESET}   {adv_severity_counts['medium']}")
+        print(f"  {Colors.GREEN}Low:{Colors.RESET}      {adv_severity_counts['low']}")
+        print(f"  {Colors.WHITE}Total:{Colors.RESET}    {len(report.advanced_findings)}")
+
+        # Update statistics
+        report.statistics["advanced_findings"] = adv_severity_counts
+        report.statistics["total_advanced_findings"] = len(report.advanced_findings)
+
+    # Logic and Cloud checks - run in parallel for faster execution
+    run_logic = not args.skip_logic and LOGIC_CHECKS_AVAILABLE
+    run_cloud = not args.skip_cloud and CLOUD_CHECKS_AVAILABLE
+
+    if run_logic or run_cloud:
+        print_section("Running Logic & Cloud Checks (Parallel)", "🚀")
+
+        # Build targets
+        logic_targets = [f"https://{args.domain}", f"http://{args.domain}"]
+        cloud_targets = [f"https://{args.domain}", f"http://{args.domain}"]
+
+        for sub in report.interesting_subdomains[:10]:
+            if sub.url:
+                cloud_targets.append(sub.url)
+                if len(logic_targets) < 7:  # Limit logic targets
+                    logic_targets.append(sub.url)
+
+        logic_targets = list(set(logic_targets))
+        cloud_targets = list(set(cloud_targets))
+
+        logic_checks_to_run = args.logic_checks or ["password_reset", "jwt", "oauth"]
+        providers = args.cloud_providers
+
+        if run_logic:
+            print(f"  Logic Checks: {', '.join(logic_checks_to_run)} ({len(logic_targets)} targets)")
+        if run_cloud:
+            print(f"  Cloud Checks: {', '.join(providers)} ({len(cloud_targets)} targets)")
+        print()
+
+        async def run_parallel_checks():
+            """Run logic and cloud checks in parallel for faster execution."""
+            logic_results = {}
+            cloud_results = {}
+
+            async def do_logic_checks():
+                if not run_logic:
+                    return {}
+                scanner = LogicVulnerabilityScanner(timeout=args.timeout)
+                try:
+                    return await scanner.scan_multiple(
+                        targets=logic_targets,
+                        checks=logic_checks_to_run,
+                        jwt_token=args.jwt_token,
+                        concurrency=5,
+                    )
+                finally:
+                    await scanner.close()
+
+            async def do_cloud_checks():
+                if not run_cloud:
+                    return {}
+                scanner = CloudSecurityScanner()
+                try:
+                    return await scanner.scan_multiple_urls(
+                        urls=cloud_targets,
+                        check_s3="s3" in providers,
+                        check_azure="azure" in providers,
+                        check_gcp="gcp" in providers,
+                        concurrency=10,
+                    )
+                finally:
+                    await scanner.close()
+
+            # Run both in parallel
+            logic_task = asyncio.create_task(do_logic_checks())
+            cloud_task = asyncio.create_task(do_cloud_checks())
+
+            logic_results, cloud_results = await asyncio.gather(
+                logic_task, cloud_task, return_exceptions=True
+            )
+
+            # Handle exceptions
+            if isinstance(logic_results, Exception):
+                print(f"  {Colors.RED}Logic check error: {logic_results}{Colors.RESET}")
+                logic_results = {}
+            if isinstance(cloud_results, Exception):
+                print(f"  {Colors.RED}Cloud check error: {cloud_results}{Colors.RESET}")
+                cloud_results = {}
+
+            return logic_results, cloud_results
+
+        # Use asyncio.run() for Python 3.7+ (cleaner than manual loop management)
+        try:
+            logic_results, cloud_results = asyncio.run(run_parallel_checks())
+        except RuntimeError:
+            # Fallback for nested event loops (e.g., in Jupyter)
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                logic_results, cloud_results = loop.run_until_complete(run_parallel_checks())
+            finally:
+                loop.close()
+
+        # Process logic findings
+        if run_logic and logic_results:
+            for target, findings in logic_results.items():
+                for finding in findings:
+                    print_logic_finding(finding)
+                    report.logic_findings.append(finding)
+
+            logic_severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+            for f in report.logic_findings:
+                sev = f.severity.value if hasattr(f.severity, 'value') else f.severity
+                if sev in logic_severity_counts:
+                    logic_severity_counts[sev] += 1
+
+            print_section("Logic Checks Summary", "📊")
+            print(f"  {Colors.RED}Critical:{Colors.RESET} {logic_severity_counts['critical']}")
+            print(f"  {Colors.YELLOW}High:{Colors.RESET}     {logic_severity_counts['high']}")
+            print(f"  {Colors.BLUE}Medium:{Colors.RESET}   {logic_severity_counts['medium']}")
+            print(f"  {Colors.GREEN}Low:{Colors.RESET}      {logic_severity_counts['low']}")
+            print(f"  {Colors.WHITE}Total:{Colors.RESET}    {len(report.logic_findings)}")
+
+            report.statistics["logic_findings"] = logic_severity_counts
+            report.statistics["total_logic_findings"] = len(report.logic_findings)
+
+        # Process cloud findings
+        if run_cloud and cloud_results:
+            for url, findings in cloud_results.items():
+                for finding in findings:
+                    sev = finding.severity.value if hasattr(finding.severity, 'value') else finding.severity
+                    if sev != "info":
+                        print_cloud_finding(finding)
+                    report.cloud_findings.append(finding)
+
+            cloud_severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+            for f in report.cloud_findings:
+                sev = f.severity.value if hasattr(f.severity, 'value') else f.severity
+                if sev in cloud_severity_counts:
+                    cloud_severity_counts[sev] += 1
+
+            print_section("Cloud Checks Summary", "📊")
+            print(f"  {Colors.RED}Critical:{Colors.RESET} {cloud_severity_counts['critical']}")
+            print(f"  {Colors.YELLOW}High:{Colors.RESET}     {cloud_severity_counts['high']}")
+            print(f"  {Colors.BLUE}Medium:{Colors.RESET}   {cloud_severity_counts['medium']}")
+            print(f"  {Colors.GREEN}Low:{Colors.RESET}      {cloud_severity_counts['low']}")
+            print(f"  {Colors.CYAN}Info:{Colors.RESET}     {cloud_severity_counts['info']}")
+            print(f"  {Colors.WHITE}Total:{Colors.RESET}    {len(report.cloud_findings)}")
+
+            report.statistics["cloud_findings"] = cloud_severity_counts
+            report.statistics["total_cloud_findings"] = len(report.cloud_findings)
+
+    else:
+        if not args.skip_logic and not LOGIC_CHECKS_AVAILABLE:
+            print(f"\n  {Colors.YELLOW}Logic checks not available (module not loaded){Colors.RESET}")
+        if not args.skip_cloud and not CLOUD_CHECKS_AVAILABLE:
+            print(f"\n  {Colors.YELLOW}Cloud checks not available (module not loaded){Colors.RESET}")
+
+    # URL Vulnerability checks (LFI, Directory Enumeration, Backup Files)
+    if not args.skip_url_vuln and URL_VULN_AVAILABLE:
+        print_section("Running URL Vulnerability Checks", "🔍")
+
+        url_checks = args.url_checks
+        check_lfi = "lfi" in url_checks
+        check_dirs = "dirs" in url_checks
+        check_backups = "backups" in url_checks
+        check_configs = "configs" in url_checks
+
+        enabled_checks = [c for c in url_checks if c in ["lfi", "dirs", "backups", "configs"]]
+        print(f"  Checks: {', '.join(enabled_checks)}")
+
+        # Build targets for URL vuln checks
+        url_vuln_targets = [f"https://{args.domain}", f"http://{args.domain}"]
+        for sub in report.interesting_subdomains[:10]:
+            if sub.url:
+                url_vuln_targets.append(sub.url)
+        url_vuln_targets = list(set(url_vuln_targets))
+        print(f"  Targets: {len(url_vuln_targets)}")
+        print()
+
+        def on_url_vuln_finding(finding):
+            print_url_vuln_finding(finding)
+            report.url_vuln_findings.append(finding)
+
+        def on_url_vuln_progress(check_name: str, current: int, total: int):
+            if args.verbose:
+                print(f"  {Colors.GRAY}[{check_name}] {current}/{total}{Colors.RESET}", end="\r")
+
+        async def run_url_vuln_checks():
+            scanner = URLVulnScanner(
+                timeout=args.timeout,
+                callback=on_url_vuln_finding,
+                progress_callback=on_url_vuln_progress if args.verbose else None,
+            )
+            try:
+                return await scanner.scan(
+                    urls=url_vuln_targets,
+                    check_lfi=check_lfi,
+                    check_dirs=check_dirs,
+                    check_backups=check_backups,
+                    check_configs=check_configs,
+                    concurrency=args.url_vuln_threads,
+                )
+            finally:
+                await scanner.close()
+
+        try:
+            url_vuln_results = asyncio.run(run_url_vuln_checks())
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                url_vuln_results = loop.run_until_complete(run_url_vuln_checks())
+            finally:
+                loop.close()
+
+        # URL vulnerability findings summary
+        url_vuln_severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+        for f in report.url_vuln_findings:
+            sev = f.severity.value if hasattr(f.severity, 'value') else f.severity
+            if sev in url_vuln_severity_counts:
+                url_vuln_severity_counts[sev] += 1
+
+        print_section("URL Vulnerability Checks Summary", "📊")
+        print(f"  {Colors.RED}Critical:{Colors.RESET} {url_vuln_severity_counts['critical']}")
+        print(f"  {Colors.YELLOW}High:{Colors.RESET}     {url_vuln_severity_counts['high']}")
+        print(f"  {Colors.BLUE}Medium:{Colors.RESET}   {url_vuln_severity_counts['medium']}")
+        print(f"  {Colors.GREEN}Low:{Colors.RESET}      {url_vuln_severity_counts['low']}")
+        print(f"  {Colors.CYAN}Info:{Colors.RESET}     {url_vuln_severity_counts['info']}")
+        print(f"  {Colors.WHITE}Total:{Colors.RESET}    {len(report.url_vuln_findings)}")
+
+        report.statistics["url_vuln_findings"] = url_vuln_severity_counts
+        report.statistics["total_url_vuln_findings"] = len(report.url_vuln_findings)
+
+    elif not args.skip_url_vuln and not URL_VULN_AVAILABLE:
+        print(f"\n  {Colors.YELLOW}URL vulnerability checks not available (module not loaded){Colors.RESET}")
+
     # Complete report
     report.completed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
@@ -711,7 +1232,19 @@ Examples:
     print(f"  Domain: {report.domain}")
     print(f"  Subdomains: {len(report.subdomains)}")
     print(f"  Interesting: {len(report.interesting_subdomains)}")
-    print(f"  Vulnerabilities: {len(report.findings)}")
+    print(f"  Nuclei Findings: {len(report.findings)}")
+    print(f"  Advanced Findings: {len(report.advanced_findings)}")
+    print(f"  Logic Findings: {len(report.logic_findings)}")
+    print(f"  Cloud Findings: {len(report.cloud_findings)}")
+    print(f"  URL Vuln Findings: {len(report.url_vuln_findings)}")
+    total_vulns = (
+        len(report.findings) +
+        len(report.advanced_findings) +
+        len(report.logic_findings) +
+        len(report.cloud_findings) +
+        len(report.url_vuln_findings)
+    )
+    print(f"  {Colors.YELLOW}Total Vulnerabilities: {total_vulns}{Colors.RESET}")
     print(f"{Colors.GREEN}{'═' * 60}{Colors.RESET}\n")
 
 

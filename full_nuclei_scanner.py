@@ -102,6 +102,39 @@ class NucleiFinding:
 
 
 @dataclass
+class ScanProgress:
+    """Real-time progress tracking for Nuclei scans."""
+    templates_loaded: int = 0
+    templates_total: int = 0
+    hosts_scanned: int = 0
+    hosts_total: int = 0
+    requests_made: int = 0
+    requests_per_second: float = 0.0
+    errors: int = 0
+    findings: int = 0
+    percent_complete: float = 0.0
+    eta_seconds: Optional[float] = None
+    current_template: Optional[str] = None
+    elapsed_seconds: float = 0.0
+
+    def to_dict(self) -> dict:
+        return {
+            "templates_loaded": self.templates_loaded,
+            "templates_total": self.templates_total,
+            "hosts_scanned": self.hosts_scanned,
+            "hosts_total": self.hosts_total,
+            "requests_made": self.requests_made,
+            "requests_per_second": self.requests_per_second,
+            "errors": self.errors,
+            "findings": self.findings,
+            "percent_complete": self.percent_complete,
+            "eta_seconds": self.eta_seconds,
+            "current_template": self.current_template,
+            "elapsed_seconds": self.elapsed_seconds,
+        }
+
+
+@dataclass
 class ScanStatistics:
     """Statistics for a Nuclei scan."""
     total_targets: int = 0
@@ -114,13 +147,13 @@ class ScanStatistics:
     info: int = 0
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
-    
+
     @property
     def duration(self) -> float:
         if self.start_time and self.end_time:
             return (self.end_time - self.start_time).total_seconds()
         return 0
-    
+
     def to_dict(self) -> dict:
         return {
             "total_targets": self.total_targets,
@@ -135,11 +168,67 @@ class ScanStatistics:
         }
 
 
+def parse_nuclei_stats(line: str, progress: ScanProgress, start_time: datetime) -> bool:
+    """
+    Parse Nuclei stats line and update progress object.
+
+    Nuclei stats format examples:
+    - "[INF] Templates: 5000 | Hosts: 10 | RPS: 150 | Errors: 0"
+    - "[INF] Requests: 1500/5000 (30.00%)"
+    - "Templates loaded for current scan: 100"
+
+    Returns True if the line was a stats line, False otherwise.
+    """
+    import re
+
+    line_lower = line.lower()
+
+    # Calculate elapsed time
+    progress.elapsed_seconds = (datetime.now() - start_time).total_seconds()
+
+    # Parse templates loaded
+    templates_match = re.search(r'templates[:\s]+(\d+)', line_lower)
+    if templates_match:
+        progress.templates_loaded = int(templates_match.group(1))
+
+    # Parse hosts
+    hosts_match = re.search(r'hosts[:\s]+(\d+)', line_lower)
+    if hosts_match:
+        progress.hosts_scanned = int(hosts_match.group(1))
+
+    # Parse requests per second (RPS)
+    rps_match = re.search(r'rps[:\s]+(\d+\.?\d*)', line_lower)
+    if rps_match:
+        progress.requests_per_second = float(rps_match.group(1))
+
+    # Parse total requests
+    requests_match = re.search(r'requests[:\s]+(\d+)', line_lower)
+    if requests_match:
+        progress.requests_made = int(requests_match.group(1))
+
+    # Parse percentage
+    percent_match = re.search(r'(\d+\.?\d*)%', line)
+    if percent_match:
+        progress.percent_complete = float(percent_match.group(1))
+        # Calculate ETA based on percentage
+        if progress.percent_complete > 0 and progress.elapsed_seconds > 0:
+            total_estimated = progress.elapsed_seconds / (progress.percent_complete / 100)
+            progress.eta_seconds = total_estimated - progress.elapsed_seconds
+
+    # Parse errors
+    errors_match = re.search(r'errors[:\s]+(\d+)', line_lower)
+    if errors_match:
+        progress.errors = int(errors_match.group(1))
+
+    # Check if it's an INF/WRN/stats line
+    return '[inf]' in line_lower or '[wrn]' in line_lower or 'templates' in line_lower or '%' in line
+
+
 class NucleiScanner:
     """
     Comprehensive Nuclei scanner supporting all templates.
     """
-    
+
     # Popular template categories/tags
     COMMON_TAGS = [
         "cve", "cve2024", "cve2023", "cve2022", "cve2021",
@@ -149,7 +238,7 @@ class NucleiScanner:
         "disclosure", "panel", "login", "config", "backup",
         "api", "token", "cors", "crlf", "ssti", "xxe",
     ]
-    
+
     def __init__(
         self,
         nuclei_path: Optional[str] = None,
@@ -165,7 +254,7 @@ class NucleiScanner:
         headers: Optional[Dict[str, str]] = None,
         verbose: bool = False,
         callback: Optional[Callable[[NucleiFinding], None]] = None,
-        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        progress_callback: Optional[Callable[[ScanProgress], None]] = None,
     ):
         self.nuclei_path = nuclei_path or shutil.which("nuclei")
         self.templates_path = templates_path
@@ -220,15 +309,15 @@ class NucleiScanner:
     ) -> Generator[NucleiFinding, None, ScanStatistics]:
         """
         Run Nuclei scan on targets.
-        
+
         Args:
             targets: List of target URLs/hosts
             output_file: Optional file to save results
             custom_templates: Optional list of custom template paths
-            
+
         Yields:
             NucleiFinding objects as they are discovered
-            
+
         Returns:
             ScanStatistics at the end
         """
@@ -236,23 +325,28 @@ class NucleiScanner:
             total_targets=len(targets),
             start_time=datetime.now(),
         )
-        
+
+        # Initialize progress tracking
+        progress = ScanProgress(
+            hosts_total=len(targets),
+        )
+
         total_targets = len(targets)
         finding_count = 0
-        last_progress_update = 0
-        
+        last_progress_emit = 0
+
         # Create temporary file for targets
         with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as tf:
             tf.write("\n".join(targets))
             targets_file = tf.name
-        
+
         try:
             # Build command
             cmd = self._build_command(targets_file, output_file, custom_templates)
-            
+
             if self.verbose:
                 print(f"[*] Running: {' '.join(cmd)}")
-            
+
             # Run Nuclei with real-time output and stats
             # Merge stderr into stdout so we can see progress stats
             process = subprocess.Popen(
@@ -262,16 +356,32 @@ class NucleiScanner:
                 text=True,
                 bufsize=1,
             )
-            
+
             findings = []
-            
+            import time
+            last_progress_time = time.time()
+
             # Process output line by line
             for line in process.stdout:
                 line = line.strip()
                 if not line:
                     continue
-                
-                # Try to parse as JSON (checking for progress stats first)
+
+                # Try to parse as stats line
+                is_stats = parse_nuclei_stats(line, progress, stats.start_time)
+
+                if is_stats:
+                    # Emit progress callback on every stats update for responsive UI
+                    current_time = time.time()
+                    progress.findings = finding_count
+                    # Always emit on stats, but throttle to max once per second
+                    if self.progress_callback and (current_time - last_progress_time >= 1):
+                        self.progress_callback(progress)
+                        last_progress_time = current_time
+                    if self.verbose:
+                        print(f"  {line}")
+                    continue
+
                 try:
                     data = json.loads(line)
                     
@@ -289,48 +399,53 @@ class NucleiScanner:
                     # Otherwise it's a finding
                     finding = NucleiFinding.from_json(data)
                     findings.append(finding)
-                    
+
                     # Update stats
                     stats.total_findings += 1
                     severity = finding.severity.value
                     if hasattr(stats, severity):
                         setattr(stats, severity, getattr(stats, severity) + 1)
-                    
+
                     finding_count += 1
-                    
-                    # Progress callback
+                    progress.findings = finding_count
+
+                    # Emit progress on each finding
                     if self.progress_callback:
-                        self.progress_callback(50 + (finding_count * 50 // total_targets), 100, f"Found {finding_count} vulnerabilities")
-                    
-                    # Callback
+                        self.progress_callback(progress)
+
+                    # Callback for finding
                     if self.callback:
                         self.callback(finding)
-                    
+
                     yield finding
-                    
+
                 except json.JSONDecodeError:
-                    # Not JSON output, might be status message or progress
+                    # Not JSON output, might be other status message
                     if self.verbose:
                         print(f"  {line}")
-                    elif "[WRN]" not in line and "[INF]" not in line:
-                        if "templates" in line.lower() or "requests" in line.lower() or "%" in line:
-                            print(f"  {line}")
-            
+
             process.wait()
-            
+
             stats.end_time = datetime.now()
-            
+
+            # Final progress update
+            progress.percent_complete = 100.0
+            progress.elapsed_seconds = (stats.end_time - stats.start_time).total_seconds()
+            progress.eta_seconds = 0
+            if self.progress_callback:
+                self.progress_callback(progress)
+
             # Print final stats
             if self.verbose:
                 duration = (stats.end_time - stats.start_time).total_seconds()
                 print(f"\n[*] Scan completed in {duration:.1f}s - Found {finding_count} vulnerabilities")
-            
+
             # Save results if output file specified
             if output_file:
                 self._save_results(findings, stats, output_file)
-            
+
             return stats
-            
+
         finally:
             # Cleanup
             os.unlink(targets_file)
@@ -380,10 +495,10 @@ class NucleiScanner:
         for key, value in self.headers.items():
             cmd.extend(["-H", f"{key}: {value}"])
         
-        # Show stats/progress
+        # Show stats/progress - use short interval for responsive progress
         cmd.append("-stats")
         cmd.append("-stats-interval")
-        cmd.append("10")  # Show stats every 10 seconds
+        cmd.append("3")  # Show stats every 3 seconds for better progress tracking
         
         # Silent mode unless verbose
         if not self.verbose:
