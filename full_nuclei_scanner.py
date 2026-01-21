@@ -371,10 +371,11 @@ class NucleiScanner:
                 is_stats = parse_nuclei_stats(line, progress, stats.start_time)
 
                 if is_stats:
-                    # Emit progress callback at intervals (every 2 seconds or on significant change)
+                    # Emit progress callback on every stats update for responsive UI
                     current_time = time.time()
-                    if self.progress_callback and (current_time - last_progress_time >= 2):
-                        progress.findings = finding_count
+                    progress.findings = finding_count
+                    # Always emit on stats, but throttle to max once per second
+                    if self.progress_callback and (current_time - last_progress_time >= 1):
                         self.progress_callback(progress)
                         last_progress_time = current_time
                     if self.verbose:
@@ -481,10 +482,10 @@ class NucleiScanner:
         for key, value in self.headers.items():
             cmd.extend(["-H", f"{key}: {value}"])
         
-        # Show stats/progress
+        # Show stats/progress - use short interval for responsive progress
         cmd.append("-stats")
         cmd.append("-stats-interval")
-        cmd.append("10")  # Show stats every 10 seconds
+        cmd.append("3")  # Show stats every 3 seconds for better progress tracking
         
         # Silent mode unless verbose
         if not self.verbose:

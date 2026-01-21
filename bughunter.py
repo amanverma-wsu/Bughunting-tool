@@ -931,140 +931,153 @@ Examples:
         report.statistics["advanced_findings"] = adv_severity_counts
         report.statistics["total_advanced_findings"] = len(report.advanced_findings)
 
-    # Logic vulnerability checks (JWT, Password Reset, OAuth)
-    if not args.skip_logic and LOGIC_CHECKS_AVAILABLE:
-        print_section("Running Logic Vulnerability Checks", "🧠")
+    # Logic and Cloud checks - run in parallel for faster execution
+    run_logic = not args.skip_logic and LOGIC_CHECKS_AVAILABLE
+    run_cloud = not args.skip_cloud and CLOUD_CHECKS_AVAILABLE
 
-        # Determine which checks to run
-        logic_checks_to_run = args.logic_checks or ["password_reset", "jwt", "oauth"]
-        print(f"  Checks: {', '.join(logic_checks_to_run)}")
+    if run_logic or run_cloud:
+        print_section("Running Logic & Cloud Checks (Parallel)", "🚀")
 
-        # Build targets for logic checks
+        # Build targets
         logic_targets = [f"https://{args.domain}", f"http://{args.domain}"]
-        for sub in report.interesting_subdomains[:5]:
-            if sub.url:
-                logic_targets.append(sub.url)
-        logic_targets = list(set(logic_targets))
-        print(f"  Targets: {len(logic_targets)}")
-
-        if args.jwt_token:
-            print(f"  JWT Token: Provided")
-        print()
-
-        async def run_logic_checks():
-            scanner = LogicVulnerabilityScanner(timeout=args.timeout)
-            try:
-                results = await scanner.scan_multiple(
-                    targets=logic_targets,
-                    checks=logic_checks_to_run,
-                    jwt_token=args.jwt_token,
-                    concurrency=5,
-                )
-                return results
-            finally:
-                await scanner.close()
-
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        logic_results = loop.run_until_complete(run_logic_checks())
-
-        # Process and display findings
-        for target, findings in logic_results.items():
-            for finding in findings:
-                print_logic_finding(finding)
-                report.logic_findings.append(finding)
-
-        # Logic findings summary
-        logic_severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-        for f in report.logic_findings:
-            sev = f.severity.value if hasattr(f.severity, 'value') else f.severity
-            if sev in logic_severity_counts:
-                logic_severity_counts[sev] += 1
-
-        print_section("Logic Checks Summary", "📊")
-        print(f"  {Colors.RED}Critical:{Colors.RESET} {logic_severity_counts['critical']}")
-        print(f"  {Colors.YELLOW}High:{Colors.RESET}     {logic_severity_counts['high']}")
-        print(f"  {Colors.BLUE}Medium:{Colors.RESET}   {logic_severity_counts['medium']}")
-        print(f"  {Colors.GREEN}Low:{Colors.RESET}      {logic_severity_counts['low']}")
-        print(f"  {Colors.WHITE}Total:{Colors.RESET}    {len(report.logic_findings)}")
-
-        report.statistics["logic_findings"] = logic_severity_counts
-        report.statistics["total_logic_findings"] = len(report.logic_findings)
-
-    elif not args.skip_logic and not LOGIC_CHECKS_AVAILABLE:
-        print(f"\n  {Colors.YELLOW}Logic checks not available (module not loaded){Colors.RESET}")
-
-    # Cloud security checks (S3, Azure, GCP)
-    if not args.skip_cloud and CLOUD_CHECKS_AVAILABLE:
-        print_section("Running Cloud Security Checks", "☁️")
-
-        providers = args.cloud_providers
-        print(f"  Providers: {', '.join(providers)}")
-
-        # Build targets for cloud checks
         cloud_targets = [f"https://{args.domain}", f"http://{args.domain}"]
+
         for sub in report.interesting_subdomains[:10]:
             if sub.url:
                 cloud_targets.append(sub.url)
+                if len(logic_targets) < 7:  # Limit logic targets
+                    logic_targets.append(sub.url)
+
+        logic_targets = list(set(logic_targets))
         cloud_targets = list(set(cloud_targets))
-        print(f"  Targets: {len(cloud_targets)}")
+
+        logic_checks_to_run = args.logic_checks or ["password_reset", "jwt", "oauth"]
+        providers = args.cloud_providers
+
+        if run_logic:
+            print(f"  Logic Checks: {', '.join(logic_checks_to_run)} ({len(logic_targets)} targets)")
+        if run_cloud:
+            print(f"  Cloud Checks: {', '.join(providers)} ({len(cloud_targets)} targets)")
         print()
 
-        async def run_cloud_checks():
-            scanner = CloudSecurityScanner()
-            try:
-                results = await scanner.scan_multiple_urls(
-                    urls=cloud_targets,
-                    check_s3="s3" in providers,
-                    check_azure="azure" in providers,
-                    check_gcp="gcp" in providers,
-                    concurrency=10,
-                )
-                return results
-            finally:
-                await scanner.close()
+        async def run_parallel_checks():
+            """Run logic and cloud checks in parallel for faster execution."""
+            logic_results = {}
+            cloud_results = {}
 
+            async def do_logic_checks():
+                if not run_logic:
+                    return {}
+                scanner = LogicVulnerabilityScanner(timeout=args.timeout)
+                try:
+                    return await scanner.scan_multiple(
+                        targets=logic_targets,
+                        checks=logic_checks_to_run,
+                        jwt_token=args.jwt_token,
+                        concurrency=5,
+                    )
+                finally:
+                    await scanner.close()
+
+            async def do_cloud_checks():
+                if not run_cloud:
+                    return {}
+                scanner = CloudSecurityScanner()
+                try:
+                    return await scanner.scan_multiple_urls(
+                        urls=cloud_targets,
+                        check_s3="s3" in providers,
+                        check_azure="azure" in providers,
+                        check_gcp="gcp" in providers,
+                        concurrency=10,
+                    )
+                finally:
+                    await scanner.close()
+
+            # Run both in parallel
+            logic_task = asyncio.create_task(do_logic_checks())
+            cloud_task = asyncio.create_task(do_cloud_checks())
+
+            logic_results, cloud_results = await asyncio.gather(
+                logic_task, cloud_task, return_exceptions=True
+            )
+
+            # Handle exceptions
+            if isinstance(logic_results, Exception):
+                print(f"  {Colors.RED}Logic check error: {logic_results}{Colors.RESET}")
+                logic_results = {}
+            if isinstance(cloud_results, Exception):
+                print(f"  {Colors.RED}Cloud check error: {cloud_results}{Colors.RESET}")
+                cloud_results = {}
+
+            return logic_results, cloud_results
+
+        # Use asyncio.run() for Python 3.7+ (cleaner than manual loop management)
         try:
-            loop = asyncio.get_event_loop()
+            logic_results, cloud_results = asyncio.run(run_parallel_checks())
         except RuntimeError:
+            # Fallback for nested event loops (e.g., in Jupyter)
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
+            try:
+                logic_results, cloud_results = loop.run_until_complete(run_parallel_checks())
+            finally:
+                loop.close()
 
-        cloud_results = loop.run_until_complete(run_cloud_checks())
+        # Process logic findings
+        if run_logic and logic_results:
+            for target, findings in logic_results.items():
+                for finding in findings:
+                    print_logic_finding(finding)
+                    report.logic_findings.append(finding)
 
-        # Process and display findings
-        for url, findings in cloud_results.items():
-            for finding in findings:
-                # Only show non-info findings
-                sev = finding.severity.value if hasattr(finding.severity, 'value') else finding.severity
-                if sev != "info":
-                    print_cloud_finding(finding)
-                report.cloud_findings.append(finding)
+            logic_severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+            for f in report.logic_findings:
+                sev = f.severity.value if hasattr(f.severity, 'value') else f.severity
+                if sev in logic_severity_counts:
+                    logic_severity_counts[sev] += 1
 
-        # Cloud findings summary
-        cloud_severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-        for f in report.cloud_findings:
-            sev = f.severity.value if hasattr(f.severity, 'value') else f.severity
-            if sev in cloud_severity_counts:
-                cloud_severity_counts[sev] += 1
+            print_section("Logic Checks Summary", "📊")
+            print(f"  {Colors.RED}Critical:{Colors.RESET} {logic_severity_counts['critical']}")
+            print(f"  {Colors.YELLOW}High:{Colors.RESET}     {logic_severity_counts['high']}")
+            print(f"  {Colors.BLUE}Medium:{Colors.RESET}   {logic_severity_counts['medium']}")
+            print(f"  {Colors.GREEN}Low:{Colors.RESET}      {logic_severity_counts['low']}")
+            print(f"  {Colors.WHITE}Total:{Colors.RESET}    {len(report.logic_findings)}")
 
-        print_section("Cloud Checks Summary", "📊")
-        print(f"  {Colors.RED}Critical:{Colors.RESET} {cloud_severity_counts['critical']}")
-        print(f"  {Colors.YELLOW}High:{Colors.RESET}     {cloud_severity_counts['high']}")
-        print(f"  {Colors.BLUE}Medium:{Colors.RESET}   {cloud_severity_counts['medium']}")
-        print(f"  {Colors.GREEN}Low:{Colors.RESET}      {cloud_severity_counts['low']}")
-        print(f"  {Colors.CYAN}Info:{Colors.RESET}     {cloud_severity_counts['info']}")
-        print(f"  {Colors.WHITE}Total:{Colors.RESET}    {len(report.cloud_findings)}")
+            report.statistics["logic_findings"] = logic_severity_counts
+            report.statistics["total_logic_findings"] = len(report.logic_findings)
 
-        report.statistics["cloud_findings"] = cloud_severity_counts
-        report.statistics["total_cloud_findings"] = len(report.cloud_findings)
+        # Process cloud findings
+        if run_cloud and cloud_results:
+            for url, findings in cloud_results.items():
+                for finding in findings:
+                    sev = finding.severity.value if hasattr(finding.severity, 'value') else finding.severity
+                    if sev != "info":
+                        print_cloud_finding(finding)
+                    report.cloud_findings.append(finding)
 
-    elif not args.skip_cloud and not CLOUD_CHECKS_AVAILABLE:
-        print(f"\n  {Colors.YELLOW}Cloud checks not available (module not loaded){Colors.RESET}")
+            cloud_severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+            for f in report.cloud_findings:
+                sev = f.severity.value if hasattr(f.severity, 'value') else f.severity
+                if sev in cloud_severity_counts:
+                    cloud_severity_counts[sev] += 1
+
+            print_section("Cloud Checks Summary", "📊")
+            print(f"  {Colors.RED}Critical:{Colors.RESET} {cloud_severity_counts['critical']}")
+            print(f"  {Colors.YELLOW}High:{Colors.RESET}     {cloud_severity_counts['high']}")
+            print(f"  {Colors.BLUE}Medium:{Colors.RESET}   {cloud_severity_counts['medium']}")
+            print(f"  {Colors.GREEN}Low:{Colors.RESET}      {cloud_severity_counts['low']}")
+            print(f"  {Colors.CYAN}Info:{Colors.RESET}     {cloud_severity_counts['info']}")
+            print(f"  {Colors.WHITE}Total:{Colors.RESET}    {len(report.cloud_findings)}")
+
+            report.statistics["cloud_findings"] = cloud_severity_counts
+            report.statistics["total_cloud_findings"] = len(report.cloud_findings)
+
+    else:
+        if not args.skip_logic and not LOGIC_CHECKS_AVAILABLE:
+            print(f"\n  {Colors.YELLOW}Logic checks not available (module not loaded){Colors.RESET}")
+        if not args.skip_cloud and not CLOUD_CHECKS_AVAILABLE:
+            print(f"\n  {Colors.YELLOW}Cloud checks not available (module not loaded){Colors.RESET}")
 
     # Complete report
     report.completed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

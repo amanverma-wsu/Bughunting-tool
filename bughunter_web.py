@@ -43,6 +43,8 @@ class ScanJob:
     phase: str = "starting"
     progress: int = 0
     total: int = 0
+    percent_complete: float = 0.0  # Overall scan percentage
+    phase_percent: float = 0.0  # Current phase percentage
     started_at: str = field(default_factory=lambda: datetime.now().isoformat())
     completed_at: Optional[str] = None
 
@@ -57,6 +59,23 @@ class ScanJob:
 
     # Statistics
     stats: dict = field(default_factory=dict)
+
+    # Phase weights for overall progress calculation
+    # Enum: 20%, Nuclei: 60%, Advanced: 20%
+    PHASE_WEIGHTS = {
+        "enumeration": (0, 20),      # 0-20%
+        "nuclei": (20, 80),          # 20-80%
+        "advanced": (80, 100),       # 80-100%
+    }
+
+    def update_phase_progress(self, phase: str, phase_percent: float):
+        """Update overall progress based on phase progress."""
+        self.phase_percent = phase_percent
+        if phase in self.PHASE_WEIGHTS:
+            start, end = self.PHASE_WEIGHTS[phase]
+            self.percent_complete = start + (phase_percent / 100.0) * (end - start)
+        else:
+            self.percent_complete = phase_percent
 
 
 def run_scan_job(job: ScanJob):
@@ -78,12 +97,18 @@ def run_scan_job(job: ScanJob):
                 job.subdomains.append(sub_dict)
                 if info.is_interesting:
                     job.interesting_subdomains.append(sub_dict)
-                
+
+                # Estimate enumeration progress (rough estimate based on typical subdomain count)
+                estimated_total = max(100, len(job.subdomains) * 2)  # Dynamic estimate
+                enum_percent = min(95, (len(job.subdomains) / estimated_total) * 100)
+                job.update_phase_progress("enumeration", enum_percent)
+
                 socketio.emit("subdomain_found", {
                     "job_id": job.job_id,
                     "subdomain": sub_dict,
                     "total": len(job.subdomains),
                     "interesting": len(job.interesting_subdomains),
+                    "percent_complete": job.percent_complete,
                 }, namespace="/scan")
             
             enumerator = SubdomainEnumerator(
@@ -105,8 +130,10 @@ def run_scan_job(job: ScanJob):
                     all_targets.add(f"http://{sub.subdomain}")
                     all_targets.add(f"https://{sub.subdomain}")
             
+            # Mark enumeration as complete (20% of overall)
+            job.update_phase_progress("enumeration", 100)
             emit_update(job, f"Found {len(subdomains)} subdomains, {len(job.interesting_subdomains)} interesting")
-        
+
         # Add main domain
         all_targets.add(f"http://{job.domain}")
         all_targets.add(f"https://{job.domain}")
@@ -141,10 +168,23 @@ def run_scan_job(job: ScanJob):
 
             def progress_callback(progress: ScanProgress):
                 """Emit detailed progress updates for Nuclei scan."""
+                # Update job's overall progress based on Nuclei phase progress
+                job.update_phase_progress("nuclei", progress.percent_complete)
+
                 socketio.emit("nuclei_progress", {
                     "job_id": job.job_id,
                     "progress": progress.to_dict(),
                     "message": _format_progress_message(progress),
+                    "overall_percent": job.percent_complete,
+                }, namespace="/scan")
+
+                # Also emit general progress update for UI sync
+                socketio.emit("scan_progress", {
+                    "job_id": job.job_id,
+                    "phase": job.phase,
+                    "percent_complete": job.percent_complete,
+                    "phase_percent": progress.percent_complete,
+                    "findings_count": len(job.findings),
                 }, namespace="/scan")
 
             scanner = NucleiScanner(
@@ -181,11 +221,17 @@ def run_scan_job(job: ScanJob):
                 }, namespace="/scan")
 
             def advanced_progress_callback(check_name: str, current: int, total: int):
+                # Calculate advanced phase progress
+                adv_percent = (current / total * 100) if total > 0 else 0
+                job.update_phase_progress("advanced", adv_percent)
+
                 socketio.emit("advanced_progress", {
                     "job_id": job.job_id,
                     "check_name": check_name,
                     "current": current,
                     "total": total,
+                    "percent_complete": job.percent_complete,
+                    "phase_percent": adv_percent,
                 }, namespace="/scan")
 
             adv_scanner = AdvancedScanner(
@@ -264,6 +310,8 @@ def emit_update(job: ScanJob, message: str):
         "message": message,
         "progress": job.progress,
         "total": job.total,
+        "percent_complete": job.percent_complete,
+        "phase_percent": job.phase_percent,
     }, namespace="/scan")
 
 
