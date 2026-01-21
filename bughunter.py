@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import time
+import logging
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -23,8 +24,11 @@ from typing import List, Dict, Optional, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
 
-# Disable SSL warnings
+# Disable SSL warnings and suppress urllib3 connection warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+urllib3.disable_warnings(urllib3.exceptions.ConnectionError)
+logging.getLogger("urllib3").setLevel(logging.ERROR)
+logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
 
 # Import our modules
 from subdomain_enum import SubdomainEnumerator, SubdomainInfo, check_tools_installed
