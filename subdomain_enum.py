@@ -110,15 +110,33 @@ class SubdomainInfo:
     source: str = "unknown"
     ports: List[int] = field(default_factory=list)
     
+    @staticmethod
+    def is_working_status(status_code: Optional[int]) -> bool:
+        """Check if HTTP status code indicates a working endpoint."""
+        if status_code is None:
+            return False
+        # Keep 200/401/403/5xx, exclude 301/302/404
+        return status_code in (200, 401, 403) or (500 <= status_code < 600)
+    
     @property
     def url(self) -> str:
+        # Prefer working status codes
+        if self.https_status and self.is_working_status(self.https_status):
+            return f"https://{self.subdomain}"
+        if self.http_status and self.is_working_status(self.http_status):
+            return f"http://{self.subdomain}"
+        # Fallback
         if self.https_status and self.https_status < 400:
             return f"https://{self.subdomain}"
         return f"http://{self.subdomain}"
     
     @property
     def is_interesting(self) -> bool:
-        return len(self.categories) > 0
+        # Must have interesting categories AND working status code
+        if len(self.categories) == 0:
+            return False
+        # Check if either HTTP or HTTPS has a working status
+        return self.is_working_status(self.http_status) or self.is_working_status(self.https_status)
     
     def to_dict(self) -> dict:
         return {
@@ -452,7 +470,7 @@ class SubdomainEnumerator:
                     url,
                     timeout=self.timeout,
                     verify=False,
-                    allow_redirects=True,
+                    allow_redirects=False,  # Don't follow redirects
                 )
                 
                 if scheme == "https":
@@ -460,7 +478,9 @@ class SubdomainEnumerator:
                 else:
                     info.http_status = resp.status_code
                 
-                info.is_alive = True
+                # Check if status is "working" (200/401/403/5xx, not 301/302/404)
+                if SubdomainInfo.is_working_status(resp.status_code):
+                    info.is_alive = True
                 
                 # Extract title
                 title_match = re.search(r"<title[^>]*>([^<]+)</title>", resp.text, re.I)
@@ -473,7 +493,13 @@ class SubdomainEnumerator:
                 # Basic technology detection
                 self._detect_technologies(info, resp)
                 
-                break  # If HTTPS works, no need to check HTTP
+                # If we got a working status, try the other scheme too
+                if SubdomainInfo.is_working_status(resp.status_code):
+                    if scheme == "https":
+                        # Try HTTP as fallback
+                        continue
+                    else:
+                        break  # If HTTP works, don't bother with HTTPS
                 
             except Exception:
                 pass

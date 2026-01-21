@@ -271,13 +271,22 @@ class NucleiScanner:
                 if not line:
                     continue
                 
-                # Check if it's a stats line (progress indicator)
-                if "[INF]" in line or "[WRN]" in line or "templates" in line.lower() or "requests" in line.lower() or "%" in line:
-                    print(f"  {line}")
-                    continue
-                
+                # Try to parse as JSON (checking for progress stats first)
                 try:
                     data = json.loads(line)
+                    
+                    # Check if it's a stats line (progress indicator)
+                    if "stats" in data:
+                        # Nuclei progress stats
+                        stats_data = data.get("stats", {})
+                        # Map 0-100% to 50-99% for web UI
+                        nuclei_progress = int(stats_data.get("percent", 0))
+                        web_progress = 50 + int(nuclei_progress / 2)
+                        if self.progress_callback:
+                            self.progress_callback(web_progress, 100, f"Nuclei scan progress: {nuclei_progress}%")
+                        continue
+                    
+                    # Otherwise it's a finding
                     finding = NucleiFinding.from_json(data)
                     findings.append(finding)
                     
@@ -291,7 +300,7 @@ class NucleiScanner:
                     
                     # Progress callback
                     if self.progress_callback:
-                        self.progress_callback(finding_count, total_targets, f"Found {finding_count} vulnerabilities")
+                        self.progress_callback(50 + (finding_count * 50 // total_targets), 100, f"Found {finding_count} vulnerabilities")
                     
                     # Callback
                     if self.callback:
@@ -303,8 +312,9 @@ class NucleiScanner:
                     # Not JSON output, might be status message or progress
                     if self.verbose:
                         print(f"  {line}")
-                    elif self.verbose and "[WRN]" not in line and "[INF]" not in line:
-                        print(line)
+                    elif "[WRN]" not in line and "[INF]" not in line:
+                        if "templates" in line.lower() or "requests" in line.lower() or "%" in line:
+                            print(f"  {line}")
             
             process.wait()
             
