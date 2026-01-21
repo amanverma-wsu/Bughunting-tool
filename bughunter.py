@@ -68,6 +68,12 @@ try:
 except ImportError:
     CLOUD_CHECKS_AVAILABLE = False
 
+try:
+    from url_vuln_scanner import URLVulnScanner, URLVulnFinding, VulnSeverity, VulnType
+    URL_VULN_AVAILABLE = True
+except ImportError:
+    URL_VULN_AVAILABLE = False
+
 import asyncio
 
 # Colors
@@ -105,6 +111,7 @@ class ScanReport:
     advanced_findings: List[AdvancedFinding] = field(default_factory=list)
     logic_findings: List = field(default_factory=list)  # LogicFinding
     cloud_findings: List = field(default_factory=list)  # CloudFinding
+    url_vuln_findings: List = field(default_factory=list)  # URLVulnFinding
     statistics: Dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -119,6 +126,7 @@ class ScanReport:
             "advanced_findings": [f.to_dict() for f in self.advanced_findings],
             "logic_findings": [f.to_dict() if hasattr(f, 'to_dict') else f for f in self.logic_findings],
             "cloud_findings": [f.to_dict() if hasattr(f, 'to_dict') else f for f in self.cloud_findings],
+            "url_vuln_findings": [f.to_dict() if hasattr(f, 'to_dict') else f for f in self.url_vuln_findings],
         }
 
 
@@ -217,6 +225,21 @@ def print_cloud_finding(finding):
     if finding.description:
         desc = finding.description[:80] + "..." if len(finding.description) > 80 else finding.description
         print(f"             {Colors.GRAY}Info:{Colors.RESET}   {desc}")
+    print()
+
+
+def print_url_vuln_finding(finding):
+    """Print a URL vulnerability finding."""
+    severity = finding.severity.value if hasattr(finding.severity, 'value') else finding.severity
+    vuln_type = finding.vuln_type.value if hasattr(finding.vuln_type, 'value') else finding.vuln_type
+    color = SEVERITY_COLORS.get(severity, Colors.WHITE)
+    print(f"  {color}[{severity.upper():8}]{Colors.RESET} "
+          f"{Colors.WHITE}{vuln_type.upper()}{Colors.RESET}")
+    print(f"             {Colors.GRAY}URL:{Colors.RESET}     {finding.url}")
+    print(f"             {Colors.GRAY}Payload:{Colors.RESET} {finding.payload[:60]}...")
+    if finding.description:
+        desc = finding.description[:80] + "..." if len(finding.description) > 80 else finding.description
+        print(f"             {Colors.GRAY}Info:{Colors.RESET}    {desc}")
     print()
 
 
@@ -616,6 +639,17 @@ Examples:
                              default=["s3", "azure", "gcp"],
                              help="Cloud providers to check (default: all)")
 
+    # URL vulnerability checks options (LFI, directory enum, etc.)
+    url_vuln_group = parser.add_argument_group("URL Vulnerability Checks")
+    url_vuln_group.add_argument("--skip-url-vuln", action="store_true",
+                                help="Skip URL vulnerability checks (LFI, directory enum)")
+    url_vuln_group.add_argument("--url-checks", nargs="+",
+                                choices=["lfi", "dirs", "backups", "configs"],
+                                default=["lfi", "dirs", "backups", "configs"],
+                                help="URL vulnerability checks to run (default: all)")
+    url_vuln_group.add_argument("--url-vuln-threads", type=int, default=5,
+                                help="Concurrent URL vulnerability checks (default: 5)")
+
     # Authentication options
     auth_group = parser.add_argument_group("Authentication")
     auth_group.add_argument("--auth-config", help="Path to auth config file (JSON)")
@@ -701,6 +735,11 @@ Examples:
         print(f"  {Colors.GREEN}✓{Colors.RESET} Auth Scanner: Available")
     else:
         print(f"  {Colors.GRAY}○{Colors.RESET} Auth Scanner: Not loaded")
+
+    if URL_VULN_AVAILABLE:
+        print(f"  {Colors.GREEN}✓{Colors.RESET} URL Vuln Scanner: Available (LFI, Dir Enum, Backup)")
+    else:
+        print(f"  {Colors.GRAY}○{Colors.RESET} URL Vuln Scanner: Not loaded")
 
     # Update templates if requested
     if args.update_templates and nuclei_ok:
@@ -1079,6 +1118,85 @@ Examples:
         if not args.skip_cloud and not CLOUD_CHECKS_AVAILABLE:
             print(f"\n  {Colors.YELLOW}Cloud checks not available (module not loaded){Colors.RESET}")
 
+    # URL Vulnerability checks (LFI, Directory Enumeration, Backup Files)
+    if not args.skip_url_vuln and URL_VULN_AVAILABLE:
+        print_section("Running URL Vulnerability Checks", "🔍")
+
+        url_checks = args.url_checks
+        check_lfi = "lfi" in url_checks
+        check_dirs = "dirs" in url_checks
+        check_backups = "backups" in url_checks
+        check_configs = "configs" in url_checks
+
+        enabled_checks = [c for c in url_checks if c in ["lfi", "dirs", "backups", "configs"]]
+        print(f"  Checks: {', '.join(enabled_checks)}")
+
+        # Build targets for URL vuln checks
+        url_vuln_targets = [f"https://{args.domain}", f"http://{args.domain}"]
+        for sub in report.interesting_subdomains[:10]:
+            if sub.url:
+                url_vuln_targets.append(sub.url)
+        url_vuln_targets = list(set(url_vuln_targets))
+        print(f"  Targets: {len(url_vuln_targets)}")
+        print()
+
+        def on_url_vuln_finding(finding):
+            print_url_vuln_finding(finding)
+            report.url_vuln_findings.append(finding)
+
+        def on_url_vuln_progress(check_name: str, current: int, total: int):
+            if args.verbose:
+                print(f"  {Colors.GRAY}[{check_name}] {current}/{total}{Colors.RESET}", end="\r")
+
+        async def run_url_vuln_checks():
+            scanner = URLVulnScanner(
+                timeout=args.timeout,
+                callback=on_url_vuln_finding,
+                progress_callback=on_url_vuln_progress if args.verbose else None,
+            )
+            try:
+                return await scanner.scan(
+                    urls=url_vuln_targets,
+                    check_lfi=check_lfi,
+                    check_dirs=check_dirs,
+                    check_backups=check_backups,
+                    check_configs=check_configs,
+                    concurrency=args.url_vuln_threads,
+                )
+            finally:
+                await scanner.close()
+
+        try:
+            url_vuln_results = asyncio.run(run_url_vuln_checks())
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                url_vuln_results = loop.run_until_complete(run_url_vuln_checks())
+            finally:
+                loop.close()
+
+        # URL vulnerability findings summary
+        url_vuln_severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+        for f in report.url_vuln_findings:
+            sev = f.severity.value if hasattr(f.severity, 'value') else f.severity
+            if sev in url_vuln_severity_counts:
+                url_vuln_severity_counts[sev] += 1
+
+        print_section("URL Vulnerability Checks Summary", "📊")
+        print(f"  {Colors.RED}Critical:{Colors.RESET} {url_vuln_severity_counts['critical']}")
+        print(f"  {Colors.YELLOW}High:{Colors.RESET}     {url_vuln_severity_counts['high']}")
+        print(f"  {Colors.BLUE}Medium:{Colors.RESET}   {url_vuln_severity_counts['medium']}")
+        print(f"  {Colors.GREEN}Low:{Colors.RESET}      {url_vuln_severity_counts['low']}")
+        print(f"  {Colors.CYAN}Info:{Colors.RESET}     {url_vuln_severity_counts['info']}")
+        print(f"  {Colors.WHITE}Total:{Colors.RESET}    {len(report.url_vuln_findings)}")
+
+        report.statistics["url_vuln_findings"] = url_vuln_severity_counts
+        report.statistics["total_url_vuln_findings"] = len(report.url_vuln_findings)
+
+    elif not args.skip_url_vuln and not URL_VULN_AVAILABLE:
+        print(f"\n  {Colors.YELLOW}URL vulnerability checks not available (module not loaded){Colors.RESET}")
+
     # Complete report
     report.completed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
@@ -1118,11 +1236,13 @@ Examples:
     print(f"  Advanced Findings: {len(report.advanced_findings)}")
     print(f"  Logic Findings: {len(report.logic_findings)}")
     print(f"  Cloud Findings: {len(report.cloud_findings)}")
+    print(f"  URL Vuln Findings: {len(report.url_vuln_findings)}")
     total_vulns = (
         len(report.findings) +
         len(report.advanced_findings) +
         len(report.logic_findings) +
-        len(report.cloud_findings)
+        len(report.cloud_findings) +
+        len(report.url_vuln_findings)
     )
     print(f"  {Colors.YELLOW}Total Vulnerabilities: {total_vulns}{Colors.RESET}")
     print(f"{Colors.GREEN}{'═' * 60}{Colors.RESET}\n")
